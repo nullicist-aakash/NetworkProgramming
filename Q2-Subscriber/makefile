@@ -1,6 +1,6 @@
 compile:
-	gcc -o Broker.o Broker.c
-	gcc -o Producer.o Producer.c
+	gcc -o Broker.o Broker.c -g
+	gcc -o Producer.o Producer.c -g
 
 clean:
 	rm Broker.o

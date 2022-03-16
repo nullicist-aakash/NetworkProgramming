@@ -9,8 +9,17 @@
 #include <sys/wait.h>
 #include <arpa/inet.h>
 
+#define CLEAR_INPUT { char c; while ((c = getchar()) != '\n' && c != '\r' && c != EOF); }
+#define PAUSE { printf("Press any key to continue...\n"); char c; scanf("%c", &c); }
+
 #define MAX_PENDING 5
 #define BUFFSIZE 32
+
+typedef struct message
+{
+	char topic[21];
+	char msg[513];
+} message;
 
 typedef struct topicList
 {
@@ -36,20 +45,141 @@ void clear_screen()
 #endif
 }
 
+void to_lower(char* c)
+{
+	while (*c)
+	{ 
+		if (*c >= 'A' && *c <= 'Z')
+			*c = *c - 'A' + 'a';
+
+		c++;
+	}
+}
+
+topicList* searchTopic(char* topic)
+{
+	topicList* tp = topics;
+
+	while (tp != NULL)
+	{
+		if (strcmp(tp->topic, topic) == 0)
+			break;
+
+		tp = tp->next;
+	}
+	
+	return tp;
+}
+
 void create_topic()
 {
 	char topic[21];
+	
 	printf("Enter the topic name: ");
-	scanf("%s\n", topic);
+	scanf("%[^\n]", topic);
+	to_lower(topic);
+	
+	CLEAR_INPUT;
+
+	// check for the existence of topic
+	topicList* exists = searchTopic(topic);
+
+	// if exists == NULL, we need to add topic to head of list, else print error and return
+	if (exists)
+	{
+		printf("Topic \"%s\" already exists!!\n", topic);
+		return;
+	}
+
+	exists = calloc(1, sizeof(topicList));
+	strcpy(exists->topic, topic);
+	exists->next = topics;
+	topics = exists;
 }
 
-int get_msg(char** topic, char** message)
+int get_msg(message* msg_to_send)
 {
+	printf("Enter the topic name: ");
+	scanf("%[^\n]", msg_to_send->topic);
+	CLEAR_INPUT;
+	
+	to_lower(msg_to_send->topic);
 
-} 
+	// check for the existence of topic
+	topicList* exists = searchTopic(msg_to_send->topic);
 
-void send_file()
+	// if exists == NULL, we need to report an appropriate error. else get the message and send it to server
+	
+	if (!exists)
+	{
+		printf("Topic \"%s\" doesn't exist!! Create it first.\n", msg_to_send->topic);
+		return -1;
+	}
+
+	memset(msg_to_send->msg, 0, 513);
+
+	// get the message
+	printf("Enter the message to send, terminated by newline: ");
+	scanf("%512[^\n]", msg_to_send->msg);
+	CLEAR_INPUT;
+
+	printf("Sending topic: '%s' with message '%s'...\n", msg_to_send->topic, msg_to_send->msg);
+
+	return 0;
+}
+
+void send_file(int sockfd)
 {
+	char topic[21];
+
+	printf("Enter the topic name: ");
+	scanf("%[^\n]", topic);
+	CLEAR_INPUT;
+	
+	to_lower(topic);
+
+	// check for the existence of topic
+	topicList* exists = searchTopic(topic);
+
+	// if exists == NULL, we need to report an appropriate error. else read the file and send it to server	
+	if (!exists)
+	{
+		printf("Topic \"%s\" doesn't exist!! Create it first.\n", topic);
+		return;
+	}
+
+	char path[256];
+	printf("Enter file path: ");
+	scanf("%[^\n]", path);
+
+	CLEAR_INPUT;
+
+	FILE* fp = fopen(path, "r");
+
+	if (fp == NULL)
+	{
+		perror("file read error");
+		return;
+	}
+
+	char* line;
+	int read;
+	size_t len;
+
+	while ((read = getline(&line, &len, fp)) != -1)
+	{
+		if (write(sockfd, line, strlen(line)) <= 0)
+		{
+			perror("write to server");
+			return;
+		}
+		
+		if (line != NULL)
+			free(line);
+		line = NULL;
+	}
+
+	fclose(fp);
 }
 
 void do_task(int sockfd)
@@ -59,16 +189,23 @@ void do_task(int sockfd)
 
 
 	int option = -1;
-	char c;
+	char c = 0;
 	do {
+		if (c)
+			PAUSE
+		else
+			c = 1;
+
+		clear_screen();
+
 		// Take input from user
 		printf("*********************Producer Panel*********************\n");
+		printf("0.\tExit\n");
 		printf("1.\tCreate a Topic\n");
 		printf("2.\tSend a message\n");
 		printf("3.\tSend messages from file\n");
-		printf("-1\texit\n");
 
-		printf("Select an option ");
+		printf("Select an option: ");
 		scanf("%d", &option);
 
 		// clear the buffer and clear screen
@@ -85,32 +222,23 @@ void do_task(int sockfd)
 
 		if (option == 2)
 		{
-			char** topic;
-			char** msg;
-			
-			if (get_msg(topic, msg) == -1)
+			message msg;
+			if (get_msg(&msg) == -1)
 				continue;
-			
-			// prepare the message to send to server
-			char buffer[512];
-			memset(buffer, 0, sizeof(buffer));
-			
-			strcpy(buffer + 0, *topic);
-			strcpy(buffer + strlen(*topic) + 1, *msg);
 
 			// send the buffer to broker
-			write(sockfd, buffer, sizeof(buffer));
-
+			if (write(sockfd, (char*)&msg, sizeof(message)) < 0)
+				perror("write error");
 			continue;
 		}
 
 		if (option == 3)
 		{
-			send_file();
+			send_file(sockfd);
 			continue;
 		}
 
-	} while (option != -1);
+	} while (option != 0);
 }
 
 void main(int argc, char** argv)

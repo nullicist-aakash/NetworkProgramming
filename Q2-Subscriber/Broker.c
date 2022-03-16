@@ -14,6 +14,12 @@
 
 typedef void Sigfunc(int);
 
+typedef struct message
+{
+	char topic[21];
+	char msg[513];
+} message;
+
 Sigfunc* Signal(int signo, Sigfunc* func)
 {
 	struct sigaction act, oldact;
@@ -39,7 +45,18 @@ void sig_child(int signo)
 
 void do_task(int connfd, struct sockaddr *cliaddr, socklen_t clilen)
 {
+again:
+	message m;
+	int n = read(connfd, (char*)&m, sizeof(m));
 
+	if (n <= 0)
+	{
+		perror("read error");
+		exit(-1);
+	}
+
+	printf("Received %d bytes: { Topic: '%s', Message: '%s' }\n", n, m.topic, m.msg);
+	goto again;
 }
 
 void main(int argc, char** argv)
