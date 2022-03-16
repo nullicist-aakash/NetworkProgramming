@@ -116,7 +116,7 @@ int get_msg(message* msg_to_send)
 		return -1;
 	}
 
-	memset(msg_to_send->msg, 0, 513);
+	memset(msg_to_send->msg, 0, sizeof(msg_to_send->msg));
 
 	// get the message
 	printf("Enter the message to send, terminated by newline: ");
@@ -130,21 +130,21 @@ int get_msg(message* msg_to_send)
 
 void send_file(int sockfd)
 {
-	char topic[21];
+	message m;
 
 	printf("Enter the topic name: ");
-	scanf("%[^\n]", topic);
+	scanf("%[^\n]", m.topic);
 	CLEAR_INPUT;
 	
-	to_lower(topic);
+	to_lower(m.topic);
 
 	// check for the existence of topic
-	topicList* exists = searchTopic(topic);
+	topicList* exists = searchTopic(m.topic);
 
 	// if exists == NULL, we need to report an appropriate error. else read the file and send it to server	
 	if (!exists)
 	{
-		printf("Topic \"%s\" doesn't exist!! Create it first.\n", topic);
+		printf("Topic \"%s\" doesn't exist!! Create it first.\n", m.topic);
 		return;
 	}
 
@@ -162,21 +162,22 @@ void send_file(int sockfd)
 		return;
 	}
 
-	char* line;
 	int read;
-	size_t len;
+	char *line;
+	size_t len = 0;
 
 	while ((read = getline(&line, &len, fp)) != -1)
 	{
-		if (write(sockfd, line, strlen(line)) <= 0)
-		{
-			perror("write to server");
-			return;
-		}
-		
+		strcpy(m.msg, line);
+
 		if (line != NULL)
 			free(line);
 		line = NULL;
+
+		m.msg[strlen(m.msg) - 1] = '\0';
+
+		if (write(sockfd, (char*)&m, sizeof(m)) <= 0)
+			perror("write to server");
 	}
 
 	fclose(fp);
