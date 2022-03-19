@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include <pwd.h>
 
 #define PAUSE { char c; printf("\nPress any key to continue..."); scanf("%c", &c); system("clear"); }
@@ -10,7 +11,6 @@
 
 void printPrompt()
 {
-
 	char path[PATH_MAX];
 
 	if (getcwd(path, PATH_MAX) == NULL)
@@ -64,6 +64,54 @@ void printPrompt()
 	printf("\033[0m");
 }
 
+void execute_input(char* in)
+{
+	int len = strlen(in);
+	int argc = 1;
+	char **argv;
+
+	for (int i = 1; i < len; ++i)
+		if ((in[i] == ' ' || in[i] == '\0') && in[i - 1] != ' ')
+			++argc;
+
+	if (in[len - 1] == ' ')
+		--argc;
+
+	printf("Received: %d arguments: ", argc);
+
+	if (argc == 0)
+		return;
+
+	argv = calloc(argc, sizeof(char*));
+
+	int t = 0;
+	while (in[t] == ' ')
+		++t;
+
+	int argv_index = 0;
+	
+	while (t < len)
+	{
+		argv[argv_index++] = in + t;
+	
+		while (t < len && in[t] != ' ')
+			t++;
+
+		in[t++] = '\0';
+
+		while (t < len && in[t] == ' ')
+			++t;
+	}
+
+	assert(argv_index == argc);
+	printf("{ ");
+	for (int i = 0; i < argc; ++i)
+		printf("\"%s\", ", argv[i]);
+	printf("\b\b }\n");
+
+	free(argv);
+}
+
 int main()
 {
 	system("clear");
@@ -77,6 +125,7 @@ int main()
 		char input[256];
 
 		scanf("%[^\n]", input);
+		execute_input(input);
 		CLEAR_INPUT;
 		printf("\n");
 
