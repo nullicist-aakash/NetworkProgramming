@@ -64,25 +64,30 @@ void printPrompt()
 	printf("\033[0m");
 }
 
-void execute_input(char* in)
+
+// Split the input string 'in' on the basis of spaces. returns argv (heap allocated) as NULL if input is empty
+char** split_input(char* in, int *argc)
 {
 	int len = strlen(in);
-	int argc = 1;
+	*argc = 1;
 	char **argv;
 
+	// Step 1:	count the number of arguments
+	// 		increment count when current character is space (or \0) but prev character was not space
 	for (int i = 1; i < len; ++i)
 		if ((in[i] == ' ' || in[i] == '\0') && in[i - 1] != ' ')
-			++argc;
+			++*argc;
 
 	if (in[len - 1] == ' ')
-		--argc;
+		--*argc;
 
-	printf("Received: %d arguments: ", argc);
+	// if empty input
+	if (*argc == 0 || len == 0)
+		return NULL;
 
-	if (argc == 0)
-		return;
+	printf("Received: %d arguments: ", *argc);
 
-	argv = calloc(argc, sizeof(char*));
+	argv = calloc(*argc, sizeof(char*));
 
 	int t = 0;
 	while (in[t] == ' ')
@@ -103,13 +108,15 @@ void execute_input(char* in)
 			++t;
 	}
 
-	assert(argv_index == argc);
+	// just to make sure everything is correctly parsed
+	assert(argv_index == *argc);
+
 	printf("{ ");
-	for (int i = 0; i < argc; ++i)
+	for (int i = 0; i < *argc; ++i)
 		printf("\"%s\", ", argv[i]);
 	printf("\b\b }\n");
 
-	free(argv);
+	return argv;
 }
 
 int main()
@@ -121,12 +128,23 @@ int main()
 	
 	do 
 	{
+		// Take input
 		printPrompt();
 		char input[256];
 
 		scanf("%[^\n]", input);
-		execute_input(input);
 		CLEAR_INPUT;
+
+		// Split the input
+		int argc;
+		char** argv;
+
+		argv = split_input(input, &argc);
+
+		if (argv != NULL)
+			free(argv);
+
+		// Parse the input
 		printf("\n");
 
 	} while (1);
