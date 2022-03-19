@@ -210,7 +210,7 @@ void do_task(int sockfd)
 		scanf("%d", &option);
 
 		// clear the buffer and clear screen
-		while ((c = getchar()) != '\n' && c != EOF);
+		CLEAR_INPUT;
 		clear_screen();
 
 
