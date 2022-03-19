@@ -64,59 +64,109 @@ void printPrompt()
 	printf("\033[0m");
 }
 
-
-// Split the input string 'in' on the basis of spaces. returns argv (heap allocated) as NULL if input is empty
-char** split_input(char* in, int *argc)
+char** split_string(char* in, int *argc, char delim)
 {
+	int count = 1;
 	int len = strlen(in);
-	*argc = 1;
-	char **argv;
 
-	// Step 1:	count the number of arguments
-	// 		increment count when current character is space (or \0) but prev character was not space
-	for (int i = 1; i < len; ++i)
-		if ((in[i] == ' ' || in[i] == '\0') && in[i - 1] != ' ')
-			++*argc;
-
-	if (in[len - 1] == ' ')
-		--*argc;
-
-	// if empty input
-	if (*argc == 0 || len == 0)
+	if (len == 0)
 		return NULL;
 
-	printf("Received: %d arguments: ", *argc);
+	for (int i = 1; i < len; ++i)
+		if ((in[i] == delim || in[i] == '\0') && in[i - 1] != delim)
+			++count;
 
-	argv = calloc(*argc, sizeof(char*));
+	if (in[len - 1] == delim)
+		--count;
+
+	if (count == 0)
+		return NULL;
+
+	char** strings = calloc(count + 1, sizeof(char*));
 
 	int t = 0;
-	while (in[t] == ' ')
+	while (in[t] == delim)
 		++t;
 
 	int argv_index = 0;
 	
 	while (t < len)
 	{
-		argv[argv_index++] = in + t;
+		strings[argv_index++] = in + t;
 	
-		while (t < len && in[t] != ' ')
+		while (t < len && in[t] != delim)
 			t++;
 
 		in[t++] = '\0';
 
-		while (t < len && in[t] == ' ')
+		while (t < len && in[t] == delim)
 			++t;
 	}
 
-	// just to make sure everything is correctly parsed
-	assert(argv_index == *argc);
+	if (argc != NULL)
+		*argc = count;
 
-	printf("{ ");
-	for (int i = 0; i < *argc; ++i)
-		printf("\"%s\", ", argv[i]);
-	printf("\b\b }\n");
+	return strings;
+}
 
-	return argv;
+char* getExecPath(char* in)
+{
+	if (in == NULL)
+		return NULL;
+
+	// Case 1: When absolute file path is already given
+	if (in[0] == '/')
+	{
+		char* ret = calloc(strlen(in) + 1, sizeof(char));
+		strcpy(ret, in);
+		return ret;
+	}
+
+	// Case 2: When we need to search for location in PATH env variable
+	char* tmp = getenv("PATH");
+	char* env_path = calloc(strlen(tmp) + 1, sizeof(char));
+	strcpy(env_path, tmp);
+
+	int count = 0;
+	char** locs = split_string(env_path, &count, ':');
+
+	char complete_path[PATH_MAX + 1];
+	
+	// Append current file loc to all paths and check if such file exists
+	for (int i = 0; i < count; ++i)
+	{
+		int len = strlen(locs[i]);
+		
+		strcpy(complete_path, locs[i]);
+		complete_path[len] = '/';
+		strcpy(complete_path + len + 1, in);
+
+		if (access(complete_path, F_OK | X_OK) != 0)
+			continue;
+
+		char* ret = calloc(strlen(complete_path) + 1, sizeof(char));
+		strcpy(ret, complete_path);
+		free(env_path);
+		free(locs);
+		return ret;
+	}
+
+	// deallocate resources
+	free(env_path);
+	free(locs);
+
+	// Case 3: Find file w.r.t. relative pos
+	realpath(in, complete_path);
+
+	if (access(complete_path, F_OK | X_OK) == 0)
+	{
+		printf("File found at: %s\n", complete_path);
+		char* ret = calloc(strlen(complete_path) + 1, sizeof(char));
+		strcpy(ret, complete_path);
+		return ret;
+	}
+
+	return NULL;
 }
 
 int main()
@@ -131,20 +181,44 @@ int main()
 		// Take input
 		printPrompt();
 		char input[256];
+		memset(input, 0, sizeof(input));
 
 		scanf("%[^\n]", input);
 		CLEAR_INPUT;
 
 		// Split the input
-		int argc;
-		char** argv;
+		int argc = 0;
+		char** argv = NULL;
 
-		argv = split_input(input, &argc);
+		argv = split_string(input, &argc, ' ');
+		
+		if (argv == NULL)
+		{
+			printf("\n");
+			continue;
+		}
 
-		if (argv != NULL)
+		printf("{ ");
+		for (int i = 0; i < argc; ++i)
+			printf("\"%s\", ", argv[i]);
+		printf("\b\b }\n");
+		
+		// get absolute file path of executable
+		char* path = getExecPath(argv[0]);
+
+		if (path == NULL)
+		{
+			printf("File '%s' not found for execution.\n", argv[0]);
 			free(argv);
+			printf("\n");
+			continue;
+		}
 
-		// Parse the input
+		printf("File found at: %s\n", path);
+		
+		
+		free(path);
+		free(argv);
 		printf("\n");
 
 	} while (1);
