@@ -1,10 +1,13 @@
 #include <stdio.h>
+#include <errno.h>
 #include <unistd.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <pwd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define PAUSE { char c; printf("\nPress any key to continue..."); scanf("%c", &c); system("clear"); }
 #define CLEAR_INPUT { char c; while ((c = getchar()) != '\n' && c != '\r' && c != EOF); }
@@ -160,7 +163,6 @@ char* getExecPath(char* in)
 
 	if (access(complete_path, F_OK | X_OK) == 0)
 	{
-		printf("File found at: %s\n", complete_path);
 		char* ret = calloc(strlen(complete_path) + 1, sizeof(char));
 		strcpy(ret, complete_path);
 		return ret;
@@ -169,14 +171,57 @@ char* getExecPath(char* in)
 	return NULL;
 }
 
+void execute_normal_command(char* path, char** argv);
+{
+	pid_t child_pid;
+	
+	if ((child_pid = fork()) == 0)
+	{
+		if (setpgid(0, getpid()) == -1)
+		{
+			perror("setpgid error from child");
+			exit(-1);
+		}
+		printf("************************************\n");
+		printf("Process PID       : %d\n", getpid());
+		printf("Process group PID : %d\n", getpgrp());
+		printf("Process session ID: %d\n", getsid(0));
+		printf("************************************\n\n");
+
+		execv(path, argv);
+		exit(0);
+	}
+	
+	if (child_pid == -1)
+	{
+		perror("fork error");
+		return;
+	}
+
+	if (setpgid(child_pid, child_pid) == -1 && errno == EACCES)
+		perror("setpgid error from terminal");
+
+	wait(NULL);
+}
+
+void execute(char* path, char** argv)
+{
+
+}
+
 int main()
 {
 	system("clear");
 	printf("Shell by Aakash - 2018B4A70887P\n");
-	printf("This shell is created as the part of assignment given in Network Programming course\n");
+	printf("This shell is created as the part of assignment given in Network Programming course\n\n");
+	printf("Shell PID: %d\n", getpid());
+	printf("Shell Parent PID: %d\n", getppid());
+	printf("Shell Group ID: %d\n", getpgrp());
+	printf("Shell Session ID: %d\n", getsid(0));
+
 	printf("\n\n");
 	
-	do 
+	while (1)
 	{
 		// Take input
 		printPrompt();
@@ -198,7 +243,8 @@ int main()
 			continue;
 		}
 
-		printf("{ ");
+		printf("{");
+		
 		for (int i = 0; i < argc; ++i)
 			printf("\"%s\", ", argv[i]);
 		printf("\b\b }\n");
@@ -213,15 +259,14 @@ int main()
 			printf("\n");
 			continue;
 		}
-
-		printf("File found at: %s\n", path);
 		
+		execute(path, argv);
 		
 		free(path);
 		free(argv);
 		printf("\n");
 
-	} while (1);
+	}
 
 	PAUSE;
 	return 0;
