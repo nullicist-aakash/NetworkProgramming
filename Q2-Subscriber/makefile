@@ -1,5 +1,5 @@
 compile:
-	gcc -o Broker.o Broker.c -g
+	gcc -o Broker.o Broker.c -g -pthread
 	gcc -o Producer.o Producer.c -g
 
 clean:
