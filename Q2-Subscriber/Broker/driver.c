@@ -11,29 +11,18 @@
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <arpa/inet.h>
+#include "engine.h"
 
 #define MAX_PENDING 5
 #define BUFFERSIZE 32
 
 typedef void Sigfunc(int);
 
-typedef struct message
-{
-	char topic[21];
-	char msg[513];
-} message;
-
 typedef struct my_msgbuf
 {
 	long type;
 	int msg;
 } my_msgbuf;
-
-typedef struct connectionInfo
-{
-	int connfd;
-	struct sockaddr_in cliaddr;
-} connectionInfo;
 
 Sigfunc* Signal(int signo, Sigfunc* func)
 {
@@ -120,26 +109,10 @@ restart:
 
 	connectionInfo* info = calloc(1, sizeof(connectionInfo));
 	info->connfd = connfd;
-	info->cliaddr = cliaddr;
-	printf("Accepted connection from %d.\n", ntohs(cliaddr.sin_port));
+	info->addr = cliaddr;
+	info->addrlen = clilen;
 
 	return (void*)info;
-}
-
-void do_task(int connfd, struct sockaddr *cliaddr, socklen_t clilen)
-{
-again:
-	message m;
-	int n = read(connfd, (char*)&m, sizeof(m));
-
-	if (n <= 0)
-	{
-		perror("read error");
-		exit(-1);
-	}
-
-	printf("Received %d bytes: { Topic: '%s', Message: '%s' }\n", n, m.topic, m.msg);
-	goto again;
 }
 
 void load_server(int PORT, int left_port, int right_port)
@@ -199,29 +172,35 @@ void load_server(int PORT, int left_port, int right_port)
 	pthread_create(&thread, NULL, &acceptNeighborConnection, (void*)&listenfd);
 
 
+	int leftfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	// make connection request to a server
 	servaddr.sin_family = AF_INET;
 	servaddr.sin_port = htons(left_port);
 	servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
-	if (connect(sockfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) < 0)
+	if (connect(leftfd, (struct sockaddr*)&servaddr, sizeof(servaddr)) < 0)
 	{
 		perror("connect error");
 		exit(-1);
 	}
 
-	printf("%d <--> %d\n", PORT, ntohs(servaddr.sin_port));
-
 	// wait for connection
 	connectionInfo* info;
 	pthread_join(thread, (void**)&info);
-	int connfd = info->connfd;
-	struct sockaddr_in cliaddr = info->cliaddr;
 	
-	printf("Connection established %d <--> %d\n", PORT, ntohs(cliaddr.sin_port)); 
+	connectionInfo right_info, left_info;
+
+	right_info.connfd = info->connfd;
+	right_info.addr = info->addr;
+	right_info.addrlen = info->addrlen;
+
+	left_info.connfd = leftfd;
+	left_info.addr = servaddr;
+	left_info.addrlen = sizeof(servaddr);
+
 	free(info);
+
+	printf("%6d <--> { %6d, %6d }\n", ntohs(left_info.addr.sin_port), ntohs(right_info.addr.sin_port));
 	while (1);
 }
 
@@ -283,8 +262,6 @@ void main(int argc, char** argv)
 	}
 
 	free(pids);
-
-	while (1);
 
 	// wait for connections
 	/*while (1)
