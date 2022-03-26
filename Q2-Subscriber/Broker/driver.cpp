@@ -116,8 +116,8 @@ private:
     const Queue<int> *q;
 
     const int PORT, right_port;
-    SocketInfo listenSockInfo, rightSockInfo;
-    pthread_t thread1, thread2;
+    SocketInfo listenSockInfo;
+    int neighbor_fds[2];
 
     SocketInfo makePassiveSocket()
     {
@@ -177,6 +177,7 @@ private:
             exit(1);
         }
 
+        info.connfd = info.sockfd;
         return info;
     }
 
@@ -197,12 +198,14 @@ private:
 
     static void* NeighborConnection(void* data)
     {
+        int connfd = *(int*)data;
 
+        return nullptr;
     }
 
-    void ClientConnection(const SocketInfo& info)
+    void ClientConnection(int connfd, sockaddr_in dest_addr)
     {
-
+        cout << "Server with PORT " << PORT << " is connected to client " << inet_ntoa(dest_addr.sin_addr) << endl;
     }
 
 public:
@@ -216,33 +219,48 @@ public:
 	    Signal(SIGCHLD, sig_child);
         listenSockInfo = makePassiveSocket();
 
+        // synchronize with creator
         q->send_data(getppid(), getpid(), "msgsnd error");
         q->receive_data(getpid(), "msgrcv error");
 
         // asynchronously wait for connection
+        pthread_t thread1, thread2;
         pthread_create(&thread1, nullptr, &waitForPassiveConnection, (void*)&listenSockInfo);
 
         // make a new connection request
-        rightSockInfo = activeConnect("127.0.0.1", right_port);
+        auto rightSockInfo = activeConnect("127.0.0.1", right_port);
         pthread_join(thread1, nullptr);
 
-        cout << ntohs(listenSockInfo.my_addr.sin_port) << " : Conected to port " << ntohs(listenSockInfo.dest_addr.sin_port) << endl;
-        cout << PORT << " : Conected to port " << ntohs(rightSockInfo.dest_addr.sin_port) << endl;
+        cout << ntohs(listenSockInfo.my_addr.sin_port) << " : Connected to port " << ntohs(listenSockInfo.dest_addr.sin_port) << endl;
+        cout << PORT << " : Connected to port " << ntohs(rightSockInfo.dest_addr.sin_port) << endl;
 
-        pthread_create(&thread1, nullptr, &NeighborConnection, &listenSockInfo);
-        pthread_create(&thread2, nullptr, &NeighborConnection, &rightSockInfo);
-    }
+        // assign thread to neighbours
+        neighbor_fds[0] = listenSockInfo.connfd;
+        neighbor_fds[1] = rightSockInfo.connfd;
+        pthread_create(&thread1, nullptr, &NeighborConnection, neighbor_fds);
+        pthread_create(&thread2, nullptr, &NeighborConnection, neighbor_fds + 1);
 
-    ~Server()
-    {
-        pthread_join(thread1, nullptr);
-        pthread_join(thread2, nullptr);
-        if (close(rightSockInfo.connfd) < 0)
-            perror("close error");
-        if (close(rightSockInfo.sockfd) < 0)
-            perror("close error");
-        if (close(listenSockInfo.sockfd) < 0)
-            perror("close error");
+        // synchronize with creator
+        q->send_data(getppid(), getpid(), "msgsnd error");
+        q->receive_data(getpid(), "msgrcv error");
+
+        // Now, we listen for connection from clients
+        while (true)
+        {
+            pthread_t thread;
+            pthread_create(&thread, nullptr, &waitForPassiveConnection, (void*)&listenSockInfo);
+            pthread_join(thread, nullptr);
+
+            // serve the client
+            if (fork() == 0)
+            {
+                close(listenSockInfo.sockfd);
+                ClientConnection(listenSockInfo.connfd, listenSockInfo.dest_addr);
+                exit(0);
+            }
+
+            close(listenSockInfo.connfd);
+        }
     }
 };
 
@@ -290,6 +308,14 @@ public:
             }
         }
   
+        // wait for all children to send the connection success message
+        for (int i = 0; i < count; ++i)
+            pids[i] = queue.receive_data(getpid(), "msgrcv error from initialiser");
+        
+        // send the signal to all children to start making connectiions
+        for (int i = 0; i < count; ++i)
+            queue.send_data(pids[i], 0, "msgsnd error from initialiser");
+            
         // wait for all children to send the connection success message
         for (int i = 0; i < count; ++i)
             pids[i] = queue.receive_data(getpid(), "msgrcv error from initialiser");
