@@ -111,158 +111,18 @@ struct SocketInfo
     struct sockaddr_in dest_addr;
 };
 
-template <class T>
-struct LinkedListNode
-{
-    const T data;
-    LinkedListNode<T>* next;
-    LinkedListNode<T>* prev;
-
-    LinkedListNode(T &data, ConcurrentLinkedListNode<T>* prev = nullptr, ConcurrentLinkedListNode<T>* next = nullptr) 
-        : data {data}, prev{prev}, next { next }
-    {
-
-    }
-};
-
-template <class T>
-class ConcurrentLinkedList
-{
-private:
-    LinkedListNode<T> *head, *tail;
-    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
-public:
-    ConcurrentLinkedList()
-    {
-        head = tail = nullptr;
-    }
-
-    void insert(T &data)
-    {
-        pthread_mutex_lock(&mutex);
-        auto node = new LinkedListNode<T>(data);
-
-        if (head == nullptr)
-            head = tail = node;
-        else
-        {
-            tail->next = node;
-            tail = node;
-        }
-
-        pthread_mutex_unlock(&mutex);
-    }
-
-    void remove(LinkedListNode<T>* node)
-    {
-        pthread_mutex_lock(&mutex);
-        if (node == head && node == tail)
-        {
-            delete node;
-            head = tail = nullptr;
-        }
-        else if (node == head)
-        {
-            head = head->next;
-            delete node;
-            head->prev = nullptr;
-        }
-        else if (node == tail)
-        {
-            tail = tail->prev;
-            delete node;
-            tail->next = nullptr;
-        }
-        else
-        {
-            node->prev->next = node->next;
-            node->next->prev = node->prev;
-            delete node;
-        }
-        pthread_mutex_unlock(&mutex);
-    }
-
-    ~ConcurrentLinkedList()
-    {
-        pthread_mutex_lock(&mutex);
-
-        if (head == nullptr)
-        {
-            pthread_mutex_unlock(&mutex);
-            return;
-        }
-
-        while (head)
-        {
-            auto temp = head;
-            delete head;
-            head = temp;
-        }
-
-        tail = nullptr;
-        pthread_mutex_unlock(&mutex);
-    }
-};
-
-template <class T>
-class ConcurrentCircQueue
-{
-private:
-    const int count;
-    T *arr;
-    int front;
-    int rear;
-    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
-public:
-    ConcurrentCircQueue(int n) : count {n}
-    {
-        arr = new T[n];
-        front = -1;
-        rear = -1;
-    }
-
-    int enqueue(T &data)
-    {
-        pthread_mutex_lock(&mutex);
-        if (front == -1 && rear == -1)
-        {
-            front = rear = 0;
-            arr[rear] = data;
-        }
-        else if ((rear + 1) % count != front)
-        {
-            rear++;
-            rear %= count;
-            queue[rear] = data;
-        }
-        else
-        {        
-            pthread_mutex_unlock(&mutex);
-            return -1;
-        }
-
-        pthread_mutex_unlock(&mutex);
-        return 0;
-    }
-    
-    T deque()
-    {
-
-    }
-};
-
+class Server;
 template <class T>
 class ThreadPool
 {
 private:
     const int nthreads;
+    const Server* server;
     T *clifd;
     pthread_t *threads;
     int iget, iput;
 
-    const std::function<void(T)> lambda;
+    const std::function<void(const Server*, T)> lambda;
 
     pthread_mutex_t clifd_mutex = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t clifd_cond = PTHREAD_COND_INITIALIZER;
@@ -283,13 +143,14 @@ private:
 
             pthread_mutex_unlock(&pool->clifd_mutex);
 
-            pool->lambda(pool->clifd[pool->iget]);
+            int connfd = pool->clifd[pool->iget];
+            pool->lambda(pool->server, connfd);
             close(connfd);
         }
     }
 
 public:
-    ThreadPool(int num_threads, std::function<void(int)>& lambda) : nthreads {num_threads}, lambda {lambda}
+    ThreadPool(int num_threads, Server* server, const std::function<void(const Server*, int)>& lambda) : nthreads {num_threads}, lambda {lambda}, server {server}
     {
         iget = iput = 0;
         threads = new pthread_t[num_threads];
@@ -327,6 +188,7 @@ class Server
 {
 private:
     const Queue<int> *q;
+    ThreadPool<int> thread_pool;
 
     const int PORT, right_port;
     SocketInfo listenSockInfo;
@@ -397,7 +259,7 @@ private:
     // made static so that pthread can call it
     static void* waitForPassiveConnection(void* data)
     {
-        auto *info = (SocketInfo*)data;
+        SocketInfo* info = (SocketInfo*)data;
         socklen_t addrlen = sizeof(info->dest_addr);
 
         while ((info->connfd = accept(info->sockfd, (struct sockaddr*)&(info->dest_addr), &addrlen)) < 0)
@@ -413,16 +275,22 @@ private:
     {
         int connfd = *(int*)data;
 
+        cout << 1 << endl;
+
         return nullptr;
     }
 
-    void ClientConnection(int connfd, sockaddr_in dest_addr)
+    static void ClientConnection(const Server* server, int connfd)
     {
-        cout << "Server with PORT " << PORT << " is connected to client " << inet_ntoa(dest_addr.sin_addr) << endl;
+        cout << 2 << endl;
     }
 
 public:
-    Server(const Queue<int> *q, int port, int right) : q{q}, PORT { port }, right_port {right}
+    Server(const Queue<int> *q, int port, int right) : 
+        q{q}, 
+        PORT { port }, 
+        right_port {right}, 
+        thread_pool(32, this, ClientConnection)
     {
 
     }
@@ -461,18 +329,15 @@ public:
         while (true)
         {
             pthread_t thread;
-            pthread_create(&thread, nullptr, &waitForPassiveConnection, (void*)&listenSockInfo);
-            pthread_join(thread, nullptr);
+            socklen_t addrlen = sizeof(listenSockInfo.dest_addr);
 
-            // serve the client
-            if (fork() == 0)
-            {
-                close(listenSockInfo.sockfd);
-                ClientConnection(listenSockInfo.connfd, listenSockInfo.dest_addr);
-                exit(0);
-            }
+            while ((listenSockInfo.connfd = accept(listenSockInfo.sockfd, (struct sockaddr*)&listenSockInfo.dest_addr, &addrlen)) < 0)
+                if (errno == EINTR)
+                    continue;
+                else
+                    perror("accept error");
 
-            close(listenSockInfo.connfd);
+            thread_pool.startOperation(listenSockInfo.connfd);
         }
     }
 };
