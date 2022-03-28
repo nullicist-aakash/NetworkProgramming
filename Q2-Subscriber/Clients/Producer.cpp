@@ -215,7 +215,7 @@ public:
 		strcpy(m.topic, topic.c_str());
 		strcpy(m.msg, msg.c_str());
 
-		if (sendDataToServer(m) <= 0)
+		if (sendDataToServer(m) < 0)
 			return -1;
 
 		return getServerResponse();
@@ -249,7 +249,7 @@ public:
 			else
 				m.isLastData = true;
 
-			if (sendDataToServer(m) <= 0)
+			if (sendDataToServer(m) < 0)
 				return -1;
 		}
 

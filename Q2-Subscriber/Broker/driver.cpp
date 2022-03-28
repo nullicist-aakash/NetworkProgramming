@@ -440,23 +440,22 @@ private:
                 
                 if (strcmp(msg.req, "CRE") == 0)
                 {
-                    cout << "Start" << endl;
                     int status = server->database.addTopic(msg.topic);
-                    cout << "Done" << endl;
+
                     if (status == -1)
                         res = "TAL";
                     else
                         res = "OK";
-                    
-                    break;
                 }
 
                 if (strcmp(msg.req, "PUS") == 0)
                 {
                     int status = server->database.addMessage(msg.topic, msg.msg);
-
+                    cout << "Request status: " << status << endl;
                     if (status == -1)
-                        break;
+                        res = "NTO";
+                    else if (completeReceived)
+                        res = "OK";
                 }
             }
 
