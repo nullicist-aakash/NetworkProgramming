@@ -59,18 +59,7 @@ here:
 	}
 
 	printf("Received: { '%s', '%s' }\n", m.topic, m.msg);
-
-/*	double d = strtod(buff, NULL);
-	d += 1;
-	snprintf(buff, BUFFSIZE, "%f", d);
-
-	n = write(connfd, buff, strlen(buff) + 1);
-	if (n < 0)
-	{
-		perror("Error sending msg to client\n");
-		exit(-1);
-	}
-*/
+	
 	goto here;
 }
 

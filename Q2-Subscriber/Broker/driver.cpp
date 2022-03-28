@@ -1,4 +1,5 @@
 #include <iostream>
+#include <functional>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +15,7 @@
 #include <arpa/inet.h>
 using namespace std;
 
-#define MAX_CONNECTION_COUNT 5
+#define MAX_CONNECTION_COUNT 32
 
 typedef void Sigfunc(int);
 
@@ -108,6 +109,218 @@ struct SocketInfo
     int connfd;
     struct sockaddr_in my_addr;
     struct sockaddr_in dest_addr;
+};
+
+template <class T>
+struct LinkedListNode
+{
+    const T data;
+    LinkedListNode<T>* next;
+    LinkedListNode<T>* prev;
+
+    LinkedListNode(T &data, ConcurrentLinkedListNode<T>* prev = nullptr, ConcurrentLinkedListNode<T>* next = nullptr) 
+        : data {data}, prev{prev}, next { next }
+    {
+
+    }
+};
+
+template <class T>
+class ConcurrentLinkedList
+{
+private:
+    LinkedListNode<T> *head, *tail;
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+public:
+    ConcurrentLinkedList()
+    {
+        head = tail = nullptr;
+    }
+
+    void insert(T &data)
+    {
+        pthread_mutex_lock(&mutex);
+        auto node = new LinkedListNode<T>(data);
+
+        if (head == nullptr)
+            head = tail = node;
+        else
+        {
+            tail->next = node;
+            tail = node;
+        }
+
+        pthread_mutex_unlock(&mutex);
+    }
+
+    void remove(LinkedListNode<T>* node)
+    {
+        pthread_mutex_lock(&mutex);
+        if (node == head && node == tail)
+        {
+            delete node;
+            head = tail = nullptr;
+        }
+        else if (node == head)
+        {
+            head = head->next;
+            delete node;
+            head->prev = nullptr;
+        }
+        else if (node == tail)
+        {
+            tail = tail->prev;
+            delete node;
+            tail->next = nullptr;
+        }
+        else
+        {
+            node->prev->next = node->next;
+            node->next->prev = node->prev;
+            delete node;
+        }
+        pthread_mutex_unlock(&mutex);
+    }
+
+    ~ConcurrentLinkedList()
+    {
+        pthread_mutex_lock(&mutex);
+
+        if (head == nullptr)
+        {
+            pthread_mutex_unlock(&mutex);
+            return;
+        }
+
+        while (head)
+        {
+            auto temp = head;
+            delete head;
+            head = temp;
+        }
+
+        tail = nullptr;
+        pthread_mutex_unlock(&mutex);
+    }
+};
+
+template <class T>
+class ConcurrentCircQueue
+{
+private:
+    const int count;
+    T *arr;
+    int front;
+    int rear;
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+public:
+    ConcurrentCircQueue(int n) : count {n}
+    {
+        arr = new T[n];
+        front = -1;
+        rear = -1;
+    }
+
+    int enqueue(T &data)
+    {
+        pthread_mutex_lock(&mutex);
+        if (front == -1 && rear == -1)
+        {
+            front = rear = 0;
+            arr[rear] = data;
+        }
+        else if ((rear + 1) % count != front)
+        {
+            rear++;
+            rear %= count;
+            queue[rear] = data;
+        }
+        else
+        {        
+            pthread_mutex_unlock(&mutex);
+            return -1;
+        }
+
+        pthread_mutex_unlock(&mutex);
+        return 0;
+    }
+    
+    T deque()
+    {
+
+    }
+};
+
+template <class T>
+class ThreadPool
+{
+private:
+    const int nthreads;
+    T *clifd;
+    pthread_t *threads;
+    int iget, iput;
+
+    const std::function<void(T)> lambda;
+
+    pthread_mutex_t clifd_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t clifd_cond = PTHREAD_COND_INITIALIZER;
+
+    static void* thread_main(void* arg)
+    {
+        ThreadPool* pool = (ThreadPool*)arg;
+        
+        while (1)
+        {
+            pthread_mutex_lock(&pool->clifd_mutex);
+
+            while (pool->iget == pool->iput)
+                pthread_cond_wait(&pool->clifd_cond, &pool->clifd_mutex);
+            
+            if (++pool->iget == pool->nthreads)
+                pool->iget = 0;
+
+            pthread_mutex_unlock(&pool->clifd_mutex);
+
+            pool->lambda(pool->clifd[pool->iget]);
+            close(connfd);
+        }
+    }
+
+public:
+    ThreadPool(int num_threads, std::function<void(int)>& lambda) : nthreads {num_threads}, lambda {lambda}
+    {
+        iget = iput = 0;
+        threads = new pthread_t[num_threads];
+        clifd = new int[num_threads];
+        for (int i = 0; i < num_threads; ++i)
+            pthread_create(&threads[i], NULL, &thread_main, (void*)this);
+    }
+
+    void startOperation(T &connfd)
+    {
+        pthread_mutex_lock(&clifd_mutex);
+        clifd[iput] = connfd;
+
+        if (++iput == nthreads)
+            iput = 0;
+        
+        if (iput == iget)
+        {
+            cout << "iput = iget = " << iput << endl;
+            exit(1);
+        }
+
+        pthread_cond_signal(&clifd_cond);
+        pthread_mutex_unlock(&clifd_mutex);
+    }
+
+    ~ThreadPool()
+    {
+        delete[] clifd;
+        delete[] threads;
+    }
 };
 
 class Server
