@@ -468,7 +468,7 @@ private:
             int m;
             cout << ntohs(sockinfo.my_addr.sin_port)  << ": Sending { " << msg.req << " }" << endl;
                 
-            if ((m = write(connfd, (void*)&msg, sizeof(msg))) <= 0)
+            if ((m = write(connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) <= 0)
                 perror("write error");
         }
 

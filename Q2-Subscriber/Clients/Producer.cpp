@@ -125,7 +125,7 @@ private:
 	int getServerResponse()
 	{
 		Message m;
-		int n = read(socket, (char*)&m, sizeof(Message));
+		int n = read(socket, (char*)&m, sizeof(m) - sizeof(m.msg));
 		if (n < 0)
 		{
 			perror("reply read error");
