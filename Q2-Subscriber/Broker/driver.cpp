@@ -35,7 +35,8 @@ struct SocketInfo
   
 struct ClientMessage
 {
-    string req;
+    char req[4];
+    bool isLastData;
     char topic[maxTopicSize + 1];
     char msg[maxMessageSize + 1];
 };
@@ -134,9 +135,9 @@ class ThreadPool
 {
 private:
     const int nthreads;
-    const Server* server;
+    Server* server;
     T *clifd;
-    function<void(const Server*, T)> *lambdas;
+    function<void(Server*, T)> *lambdas;
 
     pthread_t *threads;
     int iget, iput;
@@ -175,7 +176,7 @@ public:
         iget = iput = 0;
         threads = new pthread_t[num_threads];
         clifd = new int[num_threads];
-        lambdas = new function<void(const Server*, T)>[num_threads];
+        lambdas = new function<void(Server*, T)>[num_threads];
         for (int i = 0; i < num_threads; ++i)
             lambdas[i] = nullptr;
 
@@ -183,7 +184,7 @@ public:
             pthread_create(&threads[i], NULL, &thread_main, (void*)this);
     }
 
-    void startOperation(T &connfd, const std::function<void(const Server*, int)> lambda)
+    void startOperation(T &connfd, const std::function<void(Server*, int)> lambda)
     {
         pthread_mutex_lock(&clifd_mutex);
         clifd[iput] = connfd;
@@ -237,10 +238,14 @@ private:
     }
 
 public:
-    int addTopic(const string & topic)
+    int addTopic(const char* in_topic)
     {
-        if (!topicExists(topic))
+        if (topicExists(in_topic))
+        {
+            cout << "Topic already exists!" << endl;
             return -1;
+        }
+        string topic(in_topic);
 
         lock();
         mp[topic] = {};
@@ -248,14 +253,18 @@ public:
         return 0;
     }
 
-    inline bool topicExists(const string &topic)
+    inline bool topicExists(const char* in_topic)
     {
+        string topic(in_topic);
         return mp.find(topic) != mp.end();
     }
 
-    int addMessage(string &topic, const string& message)
+    int addMessage(const char* in_topic, const char* in_message)
     {
-        if (!topicExists(topic))
+        string topic(in_topic);
+        string message(in_message);
+
+        if (!topicExists(in_topic))
             return -1;
 
         clock_t time = clock();
@@ -269,10 +278,12 @@ public:
         return 0;
     }
 
-    vector<string> getBulkMessages(string &topic)
+    vector<string> getBulkMessages(const char* in_topic)
     {
-        if (!topicExists(topic))
+        if (!topicExists(in_topic))
             return {};
+        
+        string topic(in_topic);
 
         vector<pcs> temp;
         for (int i = 0; i < BULK_LIMIT; ++i)
@@ -383,16 +394,86 @@ private:
         return nullptr;
     }
 
-    static void ServerConnection(const Server* server, int connfd)
+    static void ServerConnection(Server* server, int connfd)
     {
         int other_fd = connfd == server->neighbor_fds[0] ? server->neighbor_fds[1] : server->neighbor_fds[0];
 
 
     }
 
-    static void ClientConnection(const Server* server, int connfd)
+    static void ClientConnection(Server* server, int connfd)
     {
-        
+        int n = 1;
+        ClientMessage msg;
+        SocketInfo sockinfo;
+        socklen_t size = sizeof(sockinfo.dest_addr);
+
+        if (getpeername(connfd, (struct sockaddr*)&sockinfo.dest_addr, &size) < 0)
+        {
+            perror("getpeername error");
+            return;
+        }
+
+        if (getsockname(connfd, (struct sockaddr*)&sockinfo.my_addr, &size) < 0)
+        {
+            perror("getsockname error");
+            return;
+        }
+
+        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connected to client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+
+        while (n)
+        {
+            bool completeReceived = false;
+            string res;
+            while (!completeReceived && (n = read(connfd, (void*)&msg, sizeof(msg))) != 0)
+            {
+                if (n < 0)
+                {
+                    perror("read error");
+                    cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+                    return;
+                }
+
+                completeReceived = msg.isLastData;
+                cout << ntohs(sockinfo.my_addr.sin_port)  << ": Received { " << msg.req << ", " << msg.topic << ", " << msg.msg << " }" << endl;
+                
+                if (strcmp(msg.req, "CRE") == 0)
+                {
+                    cout << "Start" << endl;
+                    int status = server->database.addTopic(msg.topic);
+                    cout << "Done" << endl;
+                    if (status == -1)
+                        res = "TAL";
+                    else
+                        res = "OK";
+                    
+                    break;
+                }
+
+                if (strcmp(msg.req, "PUS") == 0)
+                {
+                    int status = server->database.addMessage(msg.topic, msg.msg);
+
+                    if (status == -1)
+                        break;
+                }
+            }
+
+            msg.isLastData = true;
+            if (completeReceived)
+                strcpy(msg.req, res.c_str());
+            else
+                strcpy(msg.req, "ERR");
+            
+            int m;
+            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Sending { " << msg.req << " }" << endl;
+                
+            if ((m = write(connfd, (void*)&msg, sizeof(msg))) <= 0)
+                perror("write error");
+        }
+
+        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
     }
 
 public:

@@ -138,15 +138,18 @@ private:
 			return -1;
 		}
 
-		if (m.req == "OK")
+		if (strcmp(m.req, "OK") == 0)
 		{
-			cout << "Message succesfully written on server" << endl;
+			cout << "Success!!" << endl;
 			return 0;
 		}
-		else if (m.req == "NTO")
+		
+		if (strcmp(m.req, "NTO") == 0)
 			cout << "Topic doesn't exist on server!! Create topic first" << endl;
-		else if (m.req == "ERR")
+		else if (strcmp(m.req, "ERR") == 0)
 			cout << "Error storing message on server" << endl;
+		else if (strcmp(m.req, "TAL") == 0)
+			cout << "Topic already exists on server" << endl;
 		else
 			cout << "Unknown error occured!!" << endl;
 		
@@ -180,11 +183,14 @@ public:
 		strcpy(m.req, "CRE");
 		strcpy(m.topic, topic.c_str());
 
-		if (sendDataToServer(m) <= 0)
+		if (sendDataToServer(m) < 0)
 			return -1;
 		
 		if (getServerResponse() == 0)
-			return topics.addTopic(topic);
+		{
+			topics.addTopic(topic);
+			return 0;
+		}
 		else
 			return -1;
 	}
