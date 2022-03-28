@@ -1,6 +1,6 @@
 compile:
 	g++ -o Broker.o Broker/driver.cpp -pthread
-	gcc -o Producer.o Clients/Producer.c -g
+	g++ -o Producer.o Clients/Producer.cpp -g
 
 info:
 	netstat -a -o -n

@@ -113,12 +113,56 @@ class Producer
 private:
 	struct Message
 	{
+		char req[4];
+		bool isLastData;
 		char topic[maxTopicSize + 1];
 		char msg[maxMessageSize + 1];
 	};
 
 	const int socket;
 	Topics topics;
+
+	int getServerResponse()
+	{
+		Message m;
+		int n = read(socket, (char*)&m, sizeof(Message));
+		if (n < 0)
+		{
+			perror("reply read error");
+			return -1;
+		}
+
+		if (n == 0)
+		{
+			cout << "Connection ended prematurely" << endl;
+			return -1;
+		}
+
+		if (m.req == "OK")
+		{
+			cout << "Message succesfully written on server" << endl;
+			return 0;
+		}
+		else if (m.req == "NTO")
+			cout << "Topic doesn't exist on server!! Create topic first" << endl;
+		else if (m.req == "ERR")
+			cout << "Error storing message on server" << endl;
+		else
+			cout << "Unknown error occured!!" << endl;
+		
+		return -1;
+	}
+
+	int sendDataToServer(Message& m)
+	{
+		if (write(socket, (char*)&m, sizeof(m)) <= 0)
+		{
+			perror("write to server");
+			return -1;
+		}
+
+		return 0;
+	}
 
 public:
 	Producer(int socket) : socket{socket}
@@ -128,7 +172,21 @@ public:
 
 	int createTopic(string topic)
 	{
-		return topics.addTopic(topic);
+		if (topics.topicExists(topic))	// use already stored error message
+			return topics.addTopic(topic);
+
+		Message m;
+		m.isLastData = true;
+		strcpy(m.req, "CRE");
+		strcpy(m.topic, topic.c_str());
+
+		if (sendDataToServer(m) <= 0)
+			return -1;
+		
+		if (getServerResponse() == 0)
+			return topics.addTopic(topic);
+		else
+			return -1;
 	}
 
 	int sendMessage(const string& topic, const string& msg)
@@ -146,16 +204,15 @@ public:
 		}
 
 		Message m;
+		m.isLastData = true;
+		strcpy(m.req, "PUS");
 		strcpy(m.topic, topic.c_str());
 		strcpy(m.msg, msg.c_str());
 
-		if (write(socket, (char*)&m, sizeof(Message)) < 0)
-		{
-			perror("write error");
+		if (sendDataToServer(m) <= 0)
 			return -1;
-		}
 
-		return 0;
+		return getServerResponse();
 	}
 
 	int sendFile(const string &topic, ifstream &inf)
@@ -167,6 +224,7 @@ public:
 		}
 
 		Message m;
+		strcpy(m.req, "PUS");
 		strcpy(m.topic, topic.c_str());
 		
 		while (inf)
@@ -180,14 +238,16 @@ public:
 
 			strcpy(m.msg, line.c_str());
 
-			if (write(socket, (char*)&m, sizeof(m)) <= 0)
-			{
-				perror("write to server");
+			if (inf)
+				m.isLastData = false;
+			else
+				m.isLastData = true;
+
+			if (sendDataToServer(m) <= 0)
 				return -1;
-			}
 		}
 
-		return 0;
+		return getServerResponse();
 	}
 
 	bool topicExists(const string &topic) const

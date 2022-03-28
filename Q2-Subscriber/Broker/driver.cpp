@@ -1,5 +1,8 @@
 #include <iostream>
 #include <functional>
+#include <unordered_map>
+#include <queue>
+#include <vector>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +19,26 @@
 using namespace std;
 
 #define MAX_CONNECTION_COUNT 32
+#define BULK_LIMIT 10
+#define MESSAGE_TIME_LIMIT 60
+
+const int maxMessageSize = 512;	
+const int maxTopicSize = 20;
+
+struct SocketInfo
+{
+    int sockfd;
+    int connfd;
+    struct sockaddr_in my_addr;
+    struct sockaddr_in dest_addr;
+};
+  
+struct ClientMessage
+{
+    string req;
+    char topic[maxTopicSize + 1];
+    char msg[maxMessageSize + 1];
+};
 
 typedef void Sigfunc(int);
 
@@ -103,15 +126,9 @@ public:
     }
 };
 
-struct SocketInfo
-{
-    int sockfd;
-    int connfd;
-    struct sockaddr_in my_addr;
-    struct sockaddr_in dest_addr;
-};
-
 class Server;
+
+
 template <class T>
 class ThreadPool
 {
@@ -192,11 +209,98 @@ public:
     }
 };
 
+class Database
+{
+private:
+    using pcs = pair<clock_t, string>;
+    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    unordered_map<string, priority_queue<pcs, vector<pcs>, greater<pcs>>> mp;
+
+    inline void lock()
+    {
+        pthread_mutex_lock(&mutex);
+    }
+
+    inline void unlock()
+    {
+        pthread_mutex_unlock(&mutex);
+    }
+
+    void removeOldMessages(const string &topic, const clock_t &time)
+    {
+        lock();
+
+        while (!mp[topic].empty() && ((time - mp[topic].top().first) / CLOCKS_PER_SEC) > MESSAGE_TIME_LIMIT)
+            mp[topic].pop();
+
+        unlock();
+    }
+
+public:
+    int addTopic(const string & topic)
+    {
+        if (!topicExists(topic))
+            return -1;
+
+        lock();
+        mp[topic] = {};
+        unlock();
+        return 0;
+    }
+
+    inline bool topicExists(const string &topic)
+    {
+        return mp.find(topic) != mp.end();
+    }
+
+    int addMessage(string &topic, const string& message)
+    {
+        if (!topicExists(topic))
+            return -1;
+
+        clock_t time = clock();
+        removeOldMessages(topic, time);
+
+        lock();
+
+        mp[topic].push({time, message});
+
+        unlock();
+        return 0;
+    }
+
+    vector<string> getBulkMessages(string &topic)
+    {
+        if (!topicExists(topic))
+            return {};
+
+        vector<pcs> temp;
+        for (int i = 0; i < BULK_LIMIT; ++i)
+        {
+            if (mp[topic].empty())
+                break;
+            
+            temp.push_back(mp[topic].top());
+            mp[topic].pop();
+        }
+
+        vector<string> ans;
+        for (auto &x: temp)
+        {
+            ans.push_back(x.second);
+            mp[topic].push(x);
+        }
+
+        return ans;
+    }
+};
+
 class Server
 {
 private:
     const Queue<int> *q;
     ThreadPool<int> thread_pool;
+    Database database;
 
     const int PORT, right_port;
     SocketInfo listenSockInfo;
@@ -281,7 +385,9 @@ private:
 
     static void ServerConnection(const Server* server, int connfd)
     {
-        
+        int other_fd = connfd == server->neighbor_fds[0] ? server->neighbor_fds[1] : server->neighbor_fds[0];
+
+
     }
 
     static void ClientConnection(const Server* server, int connfd)
