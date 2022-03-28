@@ -119,10 +119,10 @@ private:
     const int nthreads;
     const Server* server;
     T *clifd;
+    function<void(const Server*, T)> *lambdas;
+
     pthread_t *threads;
     int iget, iput;
-
-    const std::function<void(const Server*, T)> lambda;
 
     pthread_mutex_t clifd_mutex = PTHREAD_MUTEX_INITIALIZER;
     pthread_cond_t clifd_cond = PTHREAD_COND_INITIALIZER;
@@ -138,32 +138,40 @@ private:
             while (pool->iget == pool->iput)
                 pthread_cond_wait(&pool->clifd_cond, &pool->clifd_mutex);
             
+            int index = pool->iget;
+
             if (++pool->iget == pool->nthreads)
                 pool->iget = 0;
 
             pthread_mutex_unlock(&pool->clifd_mutex);
 
-            int connfd = pool->clifd[pool->iget];
-            pool->lambda(pool->server, connfd);
+            int connfd = pool->clifd[index];
+
+            pool->lambdas[index](pool->server, connfd);
             close(connfd);
         }
     }
 
 public:
-    ThreadPool(int num_threads, Server* server, const std::function<void(const Server*, int)>& lambda) : nthreads {num_threads}, lambda {lambda}, server {server}
+    ThreadPool(int num_threads, Server* server) : nthreads {num_threads}, server {server}
     {
         iget = iput = 0;
         threads = new pthread_t[num_threads];
         clifd = new int[num_threads];
+        lambdas = new function<void(const Server*, T)>[num_threads];
+        for (int i = 0; i < num_threads; ++i)
+            lambdas[i] = nullptr;
+
         for (int i = 0; i < num_threads; ++i)
             pthread_create(&threads[i], NULL, &thread_main, (void*)this);
     }
 
-    void startOperation(T &connfd)
+    void startOperation(T &connfd, const std::function<void(const Server*, int)> lambda)
     {
         pthread_mutex_lock(&clifd_mutex);
         clifd[iput] = connfd;
-
+        lambdas[iput] = lambda;
+        
         if (++iput == nthreads)
             iput = 0;
         
@@ -271,18 +279,14 @@ private:
         return nullptr;
     }
 
-    static void* NeighborConnection(void* data)
+    static void ServerConnection(const Server* server, int connfd)
     {
-        int connfd = *(int*)data;
-
-        cout << 1 << endl;
-
-        return nullptr;
+        
     }
 
     static void ClientConnection(const Server* server, int connfd)
     {
-        cout << 2 << endl;
+        
     }
 
 public:
@@ -290,7 +294,7 @@ public:
         q{q}, 
         PORT { port }, 
         right_port {right}, 
-        thread_pool(32, this, ClientConnection)
+        thread_pool(32, this)
     {
 
     }
@@ -318,8 +322,8 @@ public:
         // assign thread to neighbours
         neighbor_fds[0] = listenSockInfo.connfd;
         neighbor_fds[1] = rightSockInfo.connfd;
-        pthread_create(&thread1, nullptr, &NeighborConnection, neighbor_fds);
-        pthread_create(&thread2, nullptr, &NeighborConnection, neighbor_fds + 1);
+        thread_pool.startOperation(neighbor_fds[0], ServerConnection);
+        thread_pool.startOperation(neighbor_fds[1], ServerConnection);
 
         // synchronize with creator
         q->send_data(getppid(), getpid(), "msgsnd error");
@@ -337,7 +341,7 @@ public:
                 else
                     perror("accept error");
 
-            thread_pool.startOperation(listenSockInfo.connfd);
+            thread_pool.startOperation(listenSockInfo.connfd, ClientConnection);
         }
     }
 };
