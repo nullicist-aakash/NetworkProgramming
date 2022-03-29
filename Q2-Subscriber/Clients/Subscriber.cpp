@@ -108,7 +108,7 @@ public:
 	}
 };
 
-class Producer
+class Subscriber
 {
 private:
 	struct Message
@@ -150,10 +150,10 @@ private:
 			cout << "Topic doesn't exist on server!! Create topic first" << endl;
 		else if (strcmp(m.req, "ERR") == 0)
 			cout << "Error storing message on server" << endl;
-		else if (strcmp(m.req, "TAL") == 0)
-			cout << "Topic already exists on server" << endl;
+		else if (strcmp(m.req, "NMG") == 0)
+			cout << "No more messages on server" << endl;
 		else
-			cout << "Unknown error occured!!" << endl;
+			cout << "Unknown error '" << m.req << "' occured!!" << endl;
 		
 		return -1;
 	}
@@ -170,94 +170,11 @@ private:
 	}
 
 public:
-	Producer(int socket) : socket{socket}
+	Subscriber(int socket) : socket{socket}
 	{
 		
 	}
-
-	int createTopic(string topic)
-	{
-		if (topics.topicExists(topic))	// use already stored error message
-			return topics.addTopic(topic);
-
-		Message m;
-		m.isLastData = true;
-		strcpy(m.req, "CRE");
-		strcpy(m.topic, topic.c_str());
-
-		if (sendDataToServer(m, sizeof(m) - sizeof(m.msg)) < 0)
-			return -1;
-		
-		if (getServerResponse() == 0)
-		{
-			topics.addTopic(topic);
-			return 0;
-		}
-		else
-			return -1;
-	}
-
-	int sendMessage(const string& topic, const string& msg)
-	{
-		if (!topics.topicExists(topic))
-		{
-			cout << "Topic " << topic << " doesn't exist! Add it first" << endl;
-			return -1;
-		}
-
-		if (msg.size() > maxMessageSize)
-		{
-			cout << "Message length should be less than " << maxMessageSize + 1 << " characters" << endl;
-			return -1;
-		}
-
-		Message m;
-		m.isLastData = true;
-		strcpy(m.req, "PUS");
-		strcpy(m.topic, topic.c_str());
-		strcpy(m.msg, msg.c_str());
-
-		if (sendDataToServer(m, sizeof(m)) < 0)
-			return -1;
-
-		return getServerResponse();
-	}
-
-	int sendFile(const string &topic, ifstream &inf)
-	{
-		if (!topics.topicExists(topic))
-		{
-			cout << "Topic " << topic << " doesn't exist! Add it first" << endl;
-			return -1;
-		}
-
-		Message m;
-		strcpy(m.req, "PUS");
-		strcpy(m.topic, topic.c_str());
-		
-		while (inf)
-		{
-			string line;
-			getline(inf, line);
-
-			// cut the message to max size possible	
-			if (line.size() > maxMessageSize)
-				line.erase(maxMessageSize, std::string::npos);
-
-			strcpy(m.msg, line.c_str());
-
-			if (inf)
-				m.isLastData = false;
-			else
-				m.isLastData = true;
-
-			if (sendDataToServer(m, sizeof(m)) < 0)
-				return -1;
-		}
-
-		return getServerResponse();
-	}
-
+	
 	bool topicExists(const string &topic) const
 	{
 		return topics.topicExists(topic);
@@ -266,7 +183,7 @@ public:
 
 void do_task(int sockfd)
 {
-	Producer p(sockfd);
+	Subscriber p(sockfd);
 
 	int option = -1;
 	char c = 0;
@@ -283,9 +200,9 @@ void do_task(int sockfd)
 		// Take input from user
 		cout << "*********************Producer Panel*********************" << endl;
 		cout << "0.\tExit" << endl;
-		cout << "1.\tCreate a Topic" << endl;
-		cout << "2.\tSend a message" << endl;
-		cout << "3.\tSend messages from file" << endl;
+		cout << "1.\tSubscribe to a Topic" << endl;
+		cout << "2.\tRetrieve next message" << endl;
+		cout << "3.\tRetrieve all messages" << endl;
 		cout << "Select an option: ";
 		cin >> option;
 
@@ -307,47 +224,19 @@ void do_task(int sockfd)
 		
 		// perform the tasks
 		if (option == 1)
-			p.createTopic(topic);
+		{
+
+		}
 
 		if (option == 2)
 		{
-			if (!p.topicExists(topic))
-			{
-				cout << "Topic '" << topic << "' doesn't exist" << endl;
-				continue;
-			}
 
-			string message;
-			
-			cout << "Enter the message: ";
-			std::getline(std::cin >> std::ws, message);
-
-			p.sendMessage(topic, message);
 		}
 
 		if (option == 3)
 		{
-			if (!p.topicExists(topic))
-			{
-				cout << "Topic '" << topic << "' doesn't exist" << endl;
-				continue;
-			}
-
-			string file_path;
-			cout << "Enter file path: ";
-			std::getline(std::cin >> std::ws, file_path);
-
-			ifstream inf {file_path};
-
-			if (!inf)
-			{
-				cerr << "file open error" << endl;
-				continue;
-			}
-
-			p.sendFile(topic, inf);
+			
 		}
-
 	}
 }
 
@@ -358,7 +247,7 @@ int main(int argc, char** argv)
 
 	if (argc != 3)
 	{
-		printf("usage: Producer.o <IPaddress> <PORT>\n");
+		printf("usage: Subscriber.o <IPaddress> <PORT>\n");
 		exit(1);
 	}
 

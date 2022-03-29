@@ -37,6 +37,8 @@ struct ClientMessage
 {
     char req[4];
     bool isLastData;
+    clock_t time;
+    int cur_size;
     char topic[maxTopicSize + 1];
     char msg[maxMessageSize + 1];
 };
@@ -128,7 +130,6 @@ public:
 };
 
 class Server;
-
 
 template <class T>
 class ThreadPool
@@ -253,7 +254,7 @@ public:
         return 0;
     }
 
-    inline bool topicExists(const char* in_topic)
+    inline bool topicExists(const char* in_topic) const
     {
         string topic(in_topic);
         return mp.find(topic) != mp.end();
@@ -278,11 +279,54 @@ public:
         return 0;
     }
 
-    vector<string> getBulkMessages(const char* in_topic)
+    const int getMessage(const char* in_topic, clock_t &clk, string &output)
+    {
+        string topic(in_topic);
+        output = "";
+
+        if (!topicExists(in_topic))
+            return -1;
+
+        clock_t time = clock();
+        removeOldMessages(topic, time);
+
+        lock();
+
+        priority_queue<pcs> pq;
+        while (!mp[topic].empty() && mp[topic].top().first < clk)
+        {
+            pq.push(mp[topic].top());
+            mp[topic].pop();
+        }
+
+        if (!mp[topic].empty())
+        {
+            output = mp[topic].top().second;
+            clk = mp[topic].top().first;
+        }
+        
+        while (!pq.empty())
+        {
+            mp[topic].push(pq.top());
+            pq.pop();
+        }
+
+        unlock();
+
+        if (output == "")
+            return -1;
+        
+        return 0;
+    }
+
+    const vector<string> getBulkMessages(const char* in_topic)
     {
         if (!topicExists(in_topic))
             return {};
         
+        removeOldMessages(in_topic, clock());
+
+        lock();
         string topic(in_topic);
 
         vector<pcs> temp;
@@ -302,7 +346,18 @@ public:
             mp[topic].push(x);
         }
 
+        unlock();
+
         return ans;
+    }
+
+    const vector<string> getAllTopics() const
+    {
+        vector<string> ret;
+        for (auto &[key, val]: mp)
+            ret.push_back(key);
+
+        return ret;
     }
 };
 
@@ -401,32 +456,22 @@ private:
 
     }
 
-    static void ClientConnection(Server* server, int connfd)
+    static void SubscriberConnection(Server* server, const SocketInfo& sock)
     {
-        int n = 1;
+
+    }
+
+    static void PublisherConnection(Server* server, const SocketInfo& sockinfo)
+    {
         ClientMessage msg;
-        SocketInfo sockinfo;
-        socklen_t size = sizeof(sockinfo.dest_addr);
-
-        if (getpeername(connfd, (struct sockaddr*)&sockinfo.dest_addr, &size) < 0)
-        {
-            perror("getpeername error");
-            return;
-        }
-
-        if (getsockname(connfd, (struct sockaddr*)&sockinfo.my_addr, &size) < 0)
-        {
-            perror("getsockname error");
-            return;
-        }
-
-        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connected to client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+        int n = 1;
 
         while (n)
         {
             bool completeReceived = false;
             string res;
-            while (!completeReceived && (n = read(connfd, (void*)&msg, sizeof(msg))) != 0)
+            
+            while (!completeReceived && (n = read(sockinfo.connfd, (void*)&msg, sizeof(msg))) != 0)
             {
                 if (n < 0)
                 {
@@ -436,7 +481,7 @@ private:
                 }
 
                 completeReceived = msg.isLastData;
-                cout << ntohs(sockinfo.my_addr.sin_port)  << ": Received { " << msg.req << ", " << msg.topic << ", " << msg.msg << " }" << endl;
+                cout << ntohs(sockinfo.my_addr.sin_port)  << ": Received { '" << msg.req << "', '" << msg.topic << "', '" << msg.msg << "' }" << endl;
                 
                 if (strcmp(msg.req, "CRE") == 0)
                 {
@@ -467,11 +512,106 @@ private:
             
             int m;
             cout << ntohs(sockinfo.my_addr.sin_port)  << ": Sending { " << msg.req << " }" << endl;
-                
-            if ((m = write(connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) <= 0)
+
+            if ((m = write(sockinfo.connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) <= 0)
                 perror("write error");
         }
+    }
 
+    int sendAllTopics(int connfd)
+    {
+        string s;
+        for (auto &x: database.getAllTopics())
+            s += x + "\n";
+
+        const char* s_str = s.c_str();
+
+        ClientMessage msg;
+        strcpy(msg.topic, "");
+        strcpy(msg.req, "OK");
+        msg.time = clock();
+
+        if (s.size() == 0)
+        {
+            strcpy(msg.req, "NMG");
+            msg.isLastData = true;
+
+            if (write(connfd, (void*)&msg, sizeof(msg)) <= 0)
+            {
+                perror("write error");
+                return -1;
+            }
+        }
+
+        int res_count = (s.size() / maxMessageSize) + (s.size() % maxMessageSize != 0);
+        for (int i = 0; i < res_count; ++i)
+        {
+            while (s.size() > maxMessageSize)
+            {
+                int m;
+                msg.cur_size = min(s.size() - (i * maxMessageSize), (unsigned long)maxMessageSize);
+
+                memcpy((void*)msg.msg, (void*)s_str[i * maxMessageSize], msg.cur_size);
+                msg.msg[msg.cur_size] = '\0';
+                msg.isLastData = i == (res_count - 1);
+
+                if ((m = write(connfd, (void*)&msg, sizeof(msg))) <= 0)
+                {
+                    perror("write error");
+                    return -1;
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    static void ClientConnection(Server* server, int connfd)
+    {
+        int n = 1;
+        SocketInfo sockinfo;
+        sockinfo.connfd = connfd;
+        socklen_t size = sizeof(sockinfo.dest_addr);
+
+        if (getpeername(connfd, (struct sockaddr*)&sockinfo.dest_addr, &size) < 0)
+        {
+            perror("getpeername error");
+            return;
+        }
+
+        if (getsockname(connfd, (struct sockaddr*)&sockinfo.my_addr, &size) < 0)
+        {
+            perror("getsockname error");
+            return;
+        }
+
+        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connected to client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+
+        char BUFF[4];
+        n = read(connfd, (void*)BUFF, sizeof(BUFF));
+        if (n < 0)
+        {
+            perror("read error");
+            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+            return;
+        }
+        
+        if (n == 0)
+        {
+            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+            return;
+        }
+
+        if (strcmp(BUFF, "PUB") == 0)
+            PublisherConnection(server, sockinfo);
+        else if (strcmp(BUFF, "SUB") == 0)
+            SubscriberConnection(server, sockinfo);
+        else
+        {
+            cout << "Unknown client!!" << endl;
+            close(connfd);
+        }
+        
         cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
     }
 
