@@ -551,7 +551,7 @@ private:
                 int m;
                 msg.cur_size = min(s.size() - (i * maxMessageSize), (unsigned long)maxMessageSize);
 
-                memcpy((void*)msg.msg, (void*)s_str[i * maxMessageSize], msg.cur_size);
+                memcpy((void*)msg.msg, (void*)(s_str + i * maxMessageSize), msg.cur_size);
                 msg.msg[msg.cur_size] = '\0';
                 msg.isLastData = i == (res_count - 1);
 
@@ -603,15 +603,25 @@ private:
         }
 
         if (strcmp(BUFF, "PUB") == 0)
+        {
+            strcpy(BUFF, "OK");
+            write(connfd, BUFF, sizeof(BUFF));
             PublisherConnection(server, sockinfo);
+        }
         else if (strcmp(BUFF, "SUB") == 0)
+        {
+            strcpy(BUFF, "OK");
+            write(connfd, BUFF, sizeof(BUFF));
             SubscriberConnection(server, sockinfo);
+        }
         else
         {
+            strcpy(BUFF, "ERR");
+            write(connfd, BUFF, sizeof(BUFF));
             cout << "Unknown client!!" << endl;
             close(connfd);
         }
-        
+
         cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
     }
 

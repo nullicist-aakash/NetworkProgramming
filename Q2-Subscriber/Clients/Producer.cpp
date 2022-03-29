@@ -378,6 +378,37 @@ int main(int argc, char** argv)
 		exit(1);
 	}
 
+	// register as subscriber on server
+	char buff[4];
+	strcpy(buff, "PUB");
+	if (write(sockfd, buff, sizeof(buff)) < 0)
+	{
+		perror("write error to server");
+		exit(1);
+	}
+
+	int n = read(sockfd, buff, sizeof(buff));
+	if (n < 0)
+	{
+		perror("read error");
+		exit(1);
+	}
+	if (n == 0)
+	{
+		cout << "Connection ended prematurely!" << endl;
+		exit(1);
+	}
+
+	if (strcmp(buff, "OK"))
+		cout << "Connection established successfully" << endl;
+	else if (strcmp(buff, "ERR"))
+		cout << "Invalid request" << endl;
+	else
+	{
+		cout << "Unknown error occured" << endl;
+		exit(-1);
+	}
+
 	do_task(sockfd);
 	close(sockfd);
 
