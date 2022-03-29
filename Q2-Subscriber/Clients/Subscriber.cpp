@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <arpa/inet.h>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <algorithm>
 #include <cassert>
@@ -36,78 +37,6 @@ void clear_screen()
 #endif
 }
 
-class Topics
-{
-private:
-	struct topicList
-	{
-		string topic;
-		topicList* next;
-
-		topicList(const string& topic = "", topicList* nxt = nullptr)
-		{
-			this->topic = topic;
-			this->next = nxt;
-		}
-	};
-
-	topicList* list;
-
-public:
-	Topics()
-	{
-
-	}
-
-	bool topicExists(const string& topic) const
-	{
-		auto tmp = list;
-
-		while (tmp != nullptr)
-		{
-			if (topic == tmp->topic)
-				return true;
-			
-			tmp = tmp->next;
-		}
-
-		return false;
-	}
-
-	static bool isValidTopic(const string& topic)
-	{
-		return topic.size() <= maxTopicSize;
-	}
-
-	int addTopic(const string& topic)
-	{
-		if (!isValidTopic(topic))
-		{
-			cout << "Topic '" << topic << "' length should be less than " << maxTopicSize + 1 << " characters" << endl;
-			return -1;
-		}
-
-		if (topicExists(topic))
-		{
-			cout << "Topic already exists!!" << endl;
-			return -1;
-		}
-
-		list = new topicList(topic, list);
-		return 0;
-	}
-
-	~Topics()
-	{
-		while (list != nullptr)
-		{
-			auto temp = list->next;
-			delete list;
-			list = temp;
-		}
-	}
-};
-
 class Subscriber
 {
 private:
@@ -122,39 +51,50 @@ private:
 	};
 
 	const int socket;
-	Topics topics;
+	string topic;
 
-	int getServerResponse()
+	int getServerResponse(string &output) const
 	{
+		output = "";
 		Message m;
-		int n = read(socket, (char*)&m, sizeof(m) - sizeof(m.msg));
-		if (n < 0)
+		m.isLastData = false;
+
+		while (!m.isLastData)
 		{
-			perror("reply read error");
-			return -1;
+			int n = read(socket, (char*)&m, sizeof(m));
+			if (n < 0)
+			{
+				perror("reply read error");
+				return -1;
+			}
+
+			if (n == 0)
+			{
+				cout << "Connection ended prematurely" << endl;
+				return -1;
+			}
+
+			if (strcmp(m.req, "OK") == 0)
+			{
+				m.msg[m.size] = '\0';
+				output += string(m.msg);
+			}
 		}
 
-		if (n == 0)
-		{
-			cout << "Connection ended prematurely" << endl;
-			return -1;
-		}
-
-		if (strcmp(m.req, "OK") == 0)
-		{
-			cout << "Success!!" << endl;
+		if (m.isLastData && strcmp(m.req, "OK") == 0)
 			return 0;
-		}
+		
 		
 		if (strcmp(m.req, "NTO") == 0)
-			cout << "Topic doesn't exist on server!! Create topic first" << endl;
+			cout << "Topics doesn't exist on server!!" << endl;
 		else if (strcmp(m.req, "ERR") == 0)
-			cout << "Error storing message on server" << endl;
+			cout << "Some error occured on server" << endl;
 		else if (strcmp(m.req, "NMG") == 0)
 			cout << "No more messages on server" << endl;
 		else
 			cout << "Unknown error '" << m.req << "' occured!!" << endl;
 		
+		output = "";
 		return -1;
 	}
 
@@ -175,9 +115,47 @@ public:
 		
 	}
 	
-	bool topicExists(const string &topic) const
+	void setTopic(const string &topic)
 	{
-		return topics.topicExists(topic);
+		this->topic = topic;
+	}
+
+	bool isTopicSubscribed() const
+	{
+		return topic != "";
+	}
+
+	vector<string> getAllTopicsFromServer() const
+	{
+		Message m;
+		strcpy(m.req, "GET");
+		m.isLastData = true;
+
+		int n = write(socket, (void*)&m, sizeof(m) - sizeof(m.msg));
+		if (n <= 0)
+		{
+			perror("write error");
+			return {};
+		}
+
+		string output;
+		int status = getServerResponse(output);
+
+		stringstream sstr(output);
+		string topic;
+		vector<string> out;
+
+		while (sstr)
+		{
+			getline(sstr >> std::ws, topic);
+
+			if (topic != "")
+				out.push_back(topic);
+			
+			topic = "";
+		}
+
+		return out;
 	}
 };
 
@@ -187,6 +165,7 @@ void do_task(int sockfd)
 
 	int option = -1;
 	char c = 0;
+	
 
 	while (1)
 	{
@@ -198,7 +177,7 @@ void do_task(int sockfd)
 		clear_screen();
 
 		// Take input from user
-		cout << "*********************Producer Panel*********************" << endl;
+		cout << "*********************Subscriber Panel*********************" << endl;
 		cout << "0.\tExit" << endl;
 		cout << "1.\tSubscribe to a Topic" << endl;
 		cout << "2.\tRetrieve next message" << endl;
@@ -216,26 +195,53 @@ void do_task(int sockfd)
 		CLEAR_INPUT;
 		clear_screen();
 
-		string topic;
-		cout << "Enter the topic name: ";
-		std::getline(std::cin >> std::ws, topic);
-		// convert to lowercase
-		transform(topic.begin(), topic.end(), topic.begin(), ::tolower);
-		
 		// perform the tasks
 		if (option == 1)
 		{
+			auto topics = p.getAllTopicsFromServer();
 
+			if (topics.size() == 0)
+				continue;
+
+			cout << "Following are the topics on server..." << endl;
+			cout << "0 : Go Back" << endl;
+			for (int i = 0; i < topics.size(); ++i)
+				cout << i + 1 << " : " << topics[i] << endl;
+
+			cout << "Select topic number: ";
+			int opt;
+			cin >> opt;
+
+			if (opt == 0)
+				continue;
+
+			if (opt < 0 || opt > topics.size())
+			{
+				cout << "Invalid option selected!" << endl;
+				continue;
+			}
+
+			p.setTopic(topics[opt]);
+
+			cout << "Topic selected: " << topics[opt] << endl;
 		}
 
 		if (option == 2)
 		{
-
+			if (!p.isTopicSubscribed())
+			{
+				cout << "First subscribe to a topic!!" << endl;
+				continue;
+			}
 		}
 
 		if (option == 3)
 		{
-			
+			if (!p.isTopicSubscribed())
+			{
+				cout << "First subscribe to a topic!!" << endl;
+				continue;
+			}
 		}
 	}
 }
@@ -265,6 +271,40 @@ int main(int argc, char** argv)
 	{
 		perror("connect error");
 		exit(1);
+	}
+
+	// register as subscriber on server
+	char buff[4];
+	strcpy(buff, "SUB");
+	if (write(sockfd, buff, sizeof(buff)) < 0)
+	{
+		perror("write error to server");
+		exit(1);
+	}
+
+	int n = read(sockfd, buff, sizeof(buff));
+	if (n < 0)
+	{
+		perror("read error");
+		exit(1);
+	}
+	if (n == 0)
+	{
+		cout << "Connection ended prematurely!" << endl;
+		exit(1);
+	}
+
+	if (strcmp(buff, "OK") == 0)
+		cout << "Connection established successfully" << endl;
+	else if (strcmp(buff, "ERR") == 0)
+	{
+		cout << "Invalid request" << endl;
+		exit(-1);
+	}
+	else
+	{
+		cout << "Unknown error occured" << endl;
+		exit(-1);
 	}
 
 	do_task(sockfd);

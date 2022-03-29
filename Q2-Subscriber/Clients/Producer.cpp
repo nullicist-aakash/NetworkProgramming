@@ -399,10 +399,13 @@ int main(int argc, char** argv)
 		exit(1);
 	}
 
-	if (strcmp(buff, "OK"))
+	if (strcmp(buff, "OK") == 0)
 		cout << "Connection established successfully" << endl;
-	else if (strcmp(buff, "ERR"))
+	else if (strcmp(buff, "ERR") == 0)
+	{
 		cout << "Invalid request" << endl;
+		exit(-1);
+	}
 	else
 	{
 		cout << "Unknown error occured" << endl;

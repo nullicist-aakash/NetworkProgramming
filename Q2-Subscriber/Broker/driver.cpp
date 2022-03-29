@@ -449,123 +449,6 @@ private:
         return nullptr;
     }
 
-    static void ServerConnection(Server* server, int connfd)
-    {
-        int other_fd = connfd == server->neighbor_fds[0] ? server->neighbor_fds[1] : server->neighbor_fds[0];
-
-
-    }
-
-    static void SubscriberConnection(Server* server, const SocketInfo& sock)
-    {
-
-    }
-
-    static void PublisherConnection(Server* server, const SocketInfo& sockinfo)
-    {
-        ClientMessage msg;
-        int n = 1;
-
-        while (n)
-        {
-            bool completeReceived = false;
-            string res;
-            
-            while (!completeReceived && (n = read(sockinfo.connfd, (void*)&msg, sizeof(msg))) != 0)
-            {
-                if (n < 0)
-                {
-                    perror("read error");
-                    cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
-                    return;
-                }
-
-                completeReceived = msg.isLastData;
-                cout << ntohs(sockinfo.my_addr.sin_port)  << ": Received { '" << msg.req << "', '" << msg.topic << "', '" << msg.msg << "' }" << endl;
-                
-                if (strcmp(msg.req, "CRE") == 0)
-                {
-                    int status = server->database.addTopic(msg.topic);
-
-                    if (status == -1)
-                        res = "TAL";
-                    else
-                        res = "OK";
-                }
-
-                if (strcmp(msg.req, "PUS") == 0)
-                {
-                    int status = server->database.addMessage(msg.topic, msg.msg);
-                    cout << "Request status: " << status << endl;
-                    if (status == -1)
-                        res = "NTO";
-                    else if (completeReceived)
-                        res = "OK";
-                }
-            }
-
-            msg.isLastData = true;
-            if (completeReceived)
-                strcpy(msg.req, res.c_str());
-            else
-                strcpy(msg.req, "ERR");
-            
-            int m;
-            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Sending { " << msg.req << " }" << endl;
-
-            if ((m = write(sockinfo.connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) <= 0)
-                perror("write error");
-        }
-    }
-
-    int sendAllTopics(int connfd)
-    {
-        string s;
-        for (auto &x: database.getAllTopics())
-            s += x + "\n";
-
-        const char* s_str = s.c_str();
-
-        ClientMessage msg;
-        strcpy(msg.topic, "");
-        strcpy(msg.req, "OK");
-        msg.time = clock();
-
-        if (s.size() == 0)
-        {
-            strcpy(msg.req, "NMG");
-            msg.isLastData = true;
-
-            if (write(connfd, (void*)&msg, sizeof(msg)) <= 0)
-            {
-                perror("write error");
-                return -1;
-            }
-        }
-
-        int res_count = (s.size() / maxMessageSize) + (s.size() % maxMessageSize != 0);
-        for (int i = 0; i < res_count; ++i)
-        {
-            while (s.size() > maxMessageSize)
-            {
-                int m;
-                msg.cur_size = min(s.size() - (i * maxMessageSize), (unsigned long)maxMessageSize);
-
-                memcpy((void*)msg.msg, (void*)(s_str + i * maxMessageSize), msg.cur_size);
-                msg.msg[msg.cur_size] = '\0';
-                msg.isLastData = i == (res_count - 1);
-
-                if ((m = write(connfd, (void*)&msg, sizeof(msg))) <= 0)
-                {
-                    perror("write error");
-                    return -1;
-                }
-            }
-        }
-
-        return 0;
-    }
-
     static void ClientConnection(Server* server, int connfd)
     {
         int n = 1;
@@ -656,6 +539,7 @@ public:
         cout << PORT << " : Connected to port " << ntohs(rightSockInfo.dest_addr.sin_port) << endl;
 
         // assign thread to neighbours
+        void ServerConnection(Server* server, int connfd);
         neighbor_fds[0] = listenSockInfo.connfd;
         neighbor_fds[1] = rightSockInfo.connfd;
         thread_pool.startOperation(neighbor_fds[0], ServerConnection);
@@ -680,6 +564,12 @@ public:
             thread_pool.startOperation(listenSockInfo.connfd, ClientConnection);
         }
     }
+
+
+    friend int sendAllTopics(Server* server, int connfd);
+    friend void ServerConnection(Server* server, int connfd);
+    friend void SubscriberConnection(Server* server, const SocketInfo& sock);
+    friend void PublisherConnection(Server* server, const SocketInfo& sockinfo);
 };
 
 class ServerInitialiser
@@ -753,6 +643,167 @@ public:
         delete[] servers;
     }
 };
+
+int sendAllTopics(Server* server, int connfd)
+{
+    string s;
+    for (auto &x: server->database.getAllTopics())
+        s += x + "\n";
+
+    const char* s_str = s.c_str();
+
+    ClientMessage msg;
+    strcpy(msg.topic, "");
+    strcpy(msg.req, "OK");
+    msg.time = clock();
+
+    if (s.size() == 0)
+    {
+        strcpy(msg.req, "NTO");
+        msg.isLastData = true;
+
+        if (write(connfd, (void*)&msg, sizeof(msg)) <= 0)
+        {
+            perror("write error");
+            return -1;
+        }
+    }
+
+    int res_count = (s.size() / maxMessageSize) + (s.size() % maxMessageSize != 0);
+    
+    cout << "Topics sent: " << endl << s;
+
+    for (int i = 0; i < res_count; ++i)
+    {
+        int m;
+        msg.cur_size = min(s.size() - (i * maxMessageSize), (unsigned long)maxMessageSize);
+
+        memcpy((void*)msg.msg, (void*)(s_str + i * maxMessageSize), msg.cur_size);
+        msg.msg[msg.cur_size] = '\0';
+
+        msg.isLastData = i == (res_count - 1);
+
+        if ((m = write(connfd, (void*)&msg, sizeof(msg))) <= 0)
+        {
+            perror("write error");
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+void ServerConnection(Server* server, int connfd)
+{
+
+}
+
+
+void PublisherConnection(Server* server, const SocketInfo& sockinfo)
+{
+    ClientMessage msg;
+    int n = 1;
+
+    while (n)
+    {
+        bool completeReceived = false;
+        string res;
+        
+        while (!completeReceived && (n = read(sockinfo.connfd, (void*)&msg, sizeof(msg))) != 0)
+        {
+            if (n < 0)
+            {
+                perror("read error");
+                return;
+            }
+
+            completeReceived = msg.isLastData;
+            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Received { '" << msg.req << "', '" << msg.topic << "', '" << msg.msg << "' }" << endl;
+            
+            if (strcmp(msg.req, "CRE") == 0)
+            {
+                int status = server->database.addTopic(msg.topic);
+
+                if (status == -1)
+                    res = "TAL";
+                else
+                    res = "OK";
+            }
+
+            if (strcmp(msg.req, "PUS") == 0)
+            {
+                int status = server->database.addMessage(msg.topic, msg.msg);
+                cout << "Request status: " << status << endl;
+                if (status == -1)
+                    res = "NTO";
+                else if (completeReceived)
+                    res = "OK";
+            }
+        }
+
+        msg.isLastData = true;
+        if (completeReceived)
+            strcpy(msg.req, res.c_str());
+        else
+            strcpy(msg.req, "ERR");
+        
+        int m;
+        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Sending { " << msg.req << " }" << endl;
+
+        if ((m = write(sockinfo.connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) <= 0)
+            perror("write error");
+    }
+}
+
+void SubscriberConnection(Server* server, const SocketInfo& sockinfo)
+{
+    ClientMessage msg;
+    int n = 1;
+
+    while (n)
+    {
+        bool completeReceived = false;
+        string res;
+
+        while (!completeReceived && (n = read(sockinfo.connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) != 0)
+        {
+            if (n < 0)
+            {
+                perror("read error");
+                return;
+            }
+
+            completeReceived = msg.isLastData;
+            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Received { '" << msg.req << "', '" << msg.topic << "' }" << endl;
+            
+            if (strcmp(msg.req, "GET") == 0)
+            {
+                int status = sendAllTopics(server, sockinfo.connfd);
+
+                if (status == -1)
+                    res = "ERR";
+                else
+                    res = "OK";
+            }
+        }
+        
+        if (res == "OK")
+            continue;
+
+        msg.isLastData = true;
+        if (completeReceived)
+            strcpy(msg.req, res.c_str());
+        else
+            strcpy(msg.req, "ERR");
+        
+        int m;
+        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Sending { " << msg.req << " }" << endl;
+
+        if ((m = write(sockinfo.connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) <= 0)
+            perror("write error");
+    }
+}
+
 
 int main(int argc, char** argv)
 {
