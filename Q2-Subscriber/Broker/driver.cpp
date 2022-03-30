@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <queue>
 #include <vector>
+#include <cassert>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,14 +34,23 @@ struct SocketInfo
     struct sockaddr_in dest_addr;
 };
   
-struct ClientMessage
+struct ClientMessageHeader
 {
-    char req[4];
     bool isLastData;
     clock_t time;
     int cur_size;
+    char req[4];
     char topic[maxTopicSize + 1];
+};
+
+struct ClientMessage : ClientMessageHeader
+{
     char msg[maxMessageSize + 1];
+
+    void print()
+    {
+        cerr << "{ isLastData: " << isLastData << ", cur_size: " << cur_size << ", req: " << req << ", topic: " << topic << ", msg: " << msg << " }" << endl;
+    }
 };
 
 typedef void Sigfunc(int);
@@ -130,6 +140,136 @@ public:
 };
 
 class Server;
+
+namespace SocketReader
+{
+    /* Preconditions:
+     * 1.                   = connfd is a valid file descriptor
+     *
+     * Postconditions:
+     * 1.   closeConnection = true means connection is closed prematurely from client side
+     * 2.   errMsg          = in case of error, this string contains the message to display on server side
+     * 3.   return          = array of data sent by client
+    */
+    vector<ClientMessage> readClientData(int connfd, string& errMsg, bool &closeConnection)
+    {
+        errMsg = "";
+        closeConnection = false;
+
+        vector<ClientMessage> out;
+
+        ClientMessage msg;
+        msg.isLastData = false;
+        int n;
+
+        while (!msg.isLastData)
+        {
+            bzero((void*)&msg, sizeof(msg));
+            n = read(connfd, (void*)&msg, sizeof(ClientMessageHeader));
+
+            if (n < 0)
+            {
+                errMsg = "read error: " + string(strerror(errno));
+                return {};
+            }
+
+            if (n == 0)
+            {
+                errMsg = "read error: Connection closed prematurely";
+                closeConnection = true;
+                return {};
+            }
+
+            if (msg.cur_size == sizeof(ClientMessageHeader))
+            {
+                out.push_back(msg);
+                msg.print();
+                continue;
+            }
+
+            n = read(connfd, (void*)&msg.msg, msg.cur_size - sizeof(ClientMessageHeader));
+
+            if (n < 0)
+            {
+                errMsg = "read error: " + string(strerror(errno));
+                return {};
+            }
+
+            if (n == 0)
+            {
+                errMsg = "read error: Connection closed prematurely";
+                closeConnection = true;
+                return {};
+            }
+
+            out.push_back(msg);
+            msg.print();
+        }
+
+        return out;
+    }
+
+    /* Preconditions:
+     * 1.                   = connfd is a valid file descriptor
+     * 2.                   = req contains the request to send
+     * 3.                   = topic is the string which should be filled in topic field of message
+     * Postconditions:
+     * 1.   closeConnection = true means connection is closed prematurely from client side
+     * 2.   errMsg          = in case of error, this string contains the message to display on server side
+     * 3.   return          = -1 in case of error, else 0
+    */
+    int writeClientData(int connfd, const char* req, const char* topic, const vector<string>& msgs, string& errMsg, bool &closeConnection)
+    {
+        assert(strlen(topic) <= maxTopicSize);
+
+        errMsg = "";
+        closeConnection = false;
+
+        vector<ClientMessage> msgs_to_send;
+
+        ClientMessage cli_msg;
+        strcpy(cli_msg.req, req);
+        strcpy(cli_msg.topic, topic);
+        cli_msg.time = clock();
+
+        for (int i = 0; i < msgs.size(); ++i)
+        {
+            cli_msg.isLastData = i == (msgs.size() - 1);
+            cli_msg.cur_size = sizeof(ClientMessageHeader) + msgs[i].size();
+            strcpy(cli_msg.msg, msgs[i].c_str());
+            msgs_to_send.push_back(cli_msg);
+        }
+
+        if (msgs.size() == 0)
+        {
+            cli_msg.isLastData = true;
+            cli_msg.cur_size = sizeof(ClientMessageHeader);
+            strcpy(cli_msg.msg, "");
+            msgs_to_send.push_back(cli_msg);
+        }
+
+        for (auto &msg: msgs_to_send)
+        {
+            msg.print();
+            int n = write(connfd, (void*)&msg, msg.cur_size);
+            
+            if (n < 0)
+            {
+                errMsg = "write error: " + string(strerror(errno));
+                return -1;
+            }
+
+            if (n == 0)
+            {
+                errMsg = "write error: Connection closed prematurely";
+                closeConnection = true;
+                return -1;
+            }
+        }
+
+        return 0;
+    }
+};
 
 template <class T>
 class ThreadPool
@@ -274,6 +414,23 @@ public:
         lock();
 
         mp[topic].push({time, message});
+
+        unlock();
+        return 0;
+    }
+
+    int addMessages(const char* in_topic, const vector<string> &msgs)
+    {
+        string topic(in_topic);
+        if (!topicExists(in_topic))
+            return -1;
+
+        clock_t time = clock();
+        removeOldMessages(topic, time);
+        lock();
+
+        for (auto &msg: msgs)
+            mp[topic].push({time, msg});
 
         unlock();
         return 0;
@@ -502,9 +659,9 @@ private:
             strcpy(BUFF, "ERR");
             write(connfd, BUFF, sizeof(BUFF));
             cout << "Unknown client!!" << endl;
-            close(connfd);
         }
 
+        close(connfd);
         cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
     }
 
@@ -515,7 +672,7 @@ public:
         right_port {right}, 
         thread_pool(32, this)
     {
-
+        freopen(("logs/" + to_string(port) + ".log").c_str(), "w", stderr);
     }
 
     void serverOnLoad()
@@ -698,110 +855,62 @@ void ServerConnection(Server* server, int connfd)
 
 }
 
-
 void PublisherConnection(Server* server, const SocketInfo& sockinfo)
 {
-    ClientMessage msg;
-    int n = 1;
-
-    while (n)
+    while (true)
     {
-        bool completeReceived = false;
-        string res;
-        
-        while (!completeReceived && (n = read(sockinfo.connfd, (void*)&msg, sizeof(msg))) != 0)
+        // wait to get data
+        string errMsg;
+        bool isConnectionClosed;
+        auto data = SocketReader::readClientData(sockinfo.connfd, errMsg, isConnectionClosed);
+
+        if (isConnectionClosed)
+            break;
+
+        if (data.size() == 0)   // error
         {
-            if (n < 0)
-            {
-                perror("read error");
-                return;
-            }
-
-            completeReceived = msg.isLastData;
-            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Received { '" << msg.req << "', '" << msg.topic << "', '" << msg.msg << "' }" << endl;
-            
-            if (strcmp(msg.req, "CRE") == 0)
-            {
-                int status = server->database.addTopic(msg.topic);
-
-                if (status == -1)
-                    res = "TAL";
-                else
-                    res = "OK";
-            }
-
-            if (strcmp(msg.req, "PUS") == 0)
-            {
-                int status = server->database.addMessage(msg.topic, msg.msg);
-                cout << "Request status: " << status << endl;
-                if (status == -1)
-                    res = "NTO";
-                else if (completeReceived)
-                    res = "OK";
-            }
+            cout << errMsg << endl;
+            continue;
         }
 
-        msg.isLastData = true;
-        if (completeReceived)
-            strcpy(msg.req, res.c_str());
-        else
-            strcpy(msg.req, "ERR");
-        
-        int m;
-        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Sending { " << msg.req << " }" << endl;
+        if (strcmp(data[0].req, "CRE") == 0)
+        {
+            assert(data.size() == 1);
+            int status = server->database.addTopic(data[0].topic);
+            string res = (status == -1) ? "TAL" : "OK";
+            SocketReader::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
+        }
+        else if (strcmp(data[0].req, "PUS") == 0)
+        {
+            assert(data.size() == 1);
+            int status = server->database.addMessage(data[0].topic, data[0].msg);
+            string res = (status == -1) ? "NTO" : "OK";
+            SocketReader::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
+        }
+        else if (strcmp(data[0].req, "FPU") == 0)
+        {
+            vector<string> msgs;
+            for (auto &msg: data)
+                msgs.push_back(msg.msg);
 
-        if ((m = write(sockinfo.connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) <= 0)
-            perror("write error");
+            int status = server->database.addMessages(data[0].topic, msgs);
+            string res = (status == -1) ? "NTO" : "OK";
+            SocketReader::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
+        }
+
+        if (errMsg == "")
+            continue;
+
+        if (isConnectionClosed)
+            break;
+
+        cout << errMsg << endl;
     }
 }
 
 void SubscriberConnection(Server* server, const SocketInfo& sockinfo)
 {
-    ClientMessage msg;
-    int n = 1;
-
-    while (n)
-    {
-        bool completeReceived = false;
-        string res;
-
-        while (!completeReceived && (n = read(sockinfo.connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) != 0)
-        {
-            if (n < 0)
-            {
-                perror("read error");
-                return;
-            }
-
-            completeReceived = msg.isLastData;
-            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Received { '" << msg.req << "', '" << msg.topic << "' }" << endl;
-            
-            if (strcmp(msg.req, "GET") == 0)
-            {
-                int status = sendAllTopics(server, sockinfo.connfd);
-
-                if (status == -1)
-                    res = "ERR";
-                else
-                    res = "OK";
-            }
-        }
-        
-        if (res == "OK")
-            continue;
-
-        msg.isLastData = true;
-        if (completeReceived)
-            strcpy(msg.req, res.c_str());
-        else
-            strcpy(msg.req, "ERR");
-        
-        int m;
-        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Sending { " << msg.req << " }" << endl;
-
-        if ((m = write(sockinfo.connfd, (void*)&msg, sizeof(msg) - sizeof(msg.msg))) <= 0)
-            perror("write error");
-    }
+    
 }
 
 

@@ -157,6 +157,13 @@ public:
 
 		return out;
 	}
+
+	int getNextMessage(string &message)
+	{
+		Message m;
+		strcpy(m.req, "GNE");
+		
+	}
 };
 
 void do_task(int sockfd)
@@ -165,7 +172,7 @@ void do_task(int sockfd)
 
 	int option = -1;
 	char c = 0;
-	
+	clock_t clk = -1;
 
 	while (1)
 	{
@@ -242,6 +249,8 @@ void do_task(int sockfd)
 				cout << "First subscribe to a topic!!" << endl;
 				continue;
 			}
+
+
 		}
 	}
 }

@@ -1,12 +1,16 @@
 compile:
-	@g++ -o Broker.o Broker/driver.cpp -pthread
-	@g++ -o Producer.o Clients/Producer.cpp -g
-	@g++ -o Subscriber.o Clients/Subscriber.cpp -g
+	@mkdir bin || true
+	@mkdir logs || true
+	@g++ -o bin/Broker.o Broker/driver.cpp -pthread
+	@g++ -o bin/Publisher.o Clients/Publisher.cpp -g
+	@g++ -o bin/Subscriber.o Clients/Subscriber.cpp -g
 
 info:
 	@netstat -a -o -n
 
 clean:
-	@rm Broker.o || true
-	@rm Producer.o || true
-	@rm Subscriber.o || true
+	@rm bin/Broker.o || true
+	@rm bin/Publisher.o || true
+	@rm bin/Subscriber.o || true
+	@rm -r logs || true
+	@rm -r bin || true
