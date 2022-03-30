@@ -40,56 +40,60 @@ struct ServerInfo
     }
 } *info;
 
-int sendAllTopics(int connfd)
+namespace RequestHandler
 {
-    string s;
-    for (auto &x: Database::getInstance().getAllTopics())
-        s += x + "\n";
-
-    const char* s_str = s.c_str();
-
-    ClientMessage msg;
-    strcpy(msg.topic, "");
-    strcpy(msg.req, "OK");
-    msg.time = clock();
-
-    if (s.size() == 0)
+    void createTopic(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
     {
-        strcpy(msg.req, "NTO");
-        msg.isLastData = true;
+        assert(data.size() == 1);
+        int status = Database::getInstance().addTopic(data[0].topic);
+        string res = (status == -1) ? "TAL" : "OK";
 
-        if (write(connfd, (void*)&msg, sizeof(msg)) <= 0)
-        {
-            perror("write error");
-            return -1;
-        }
+        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
     }
 
-    int res_count = (s.size() / maxMessageSize) + (s.size() % maxMessageSize != 0);
-    
-    cout << "Topics sent: " << endl << s;
-
-    for (int i = 0; i < res_count; ++i)
+    void pushMessage(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
     {
-        int m;
-        msg.cur_size = min(s.size() - (i * maxMessageSize), (unsigned long)maxMessageSize);
-
-        memcpy((void*)msg.msg, (void*)(s_str + i * maxMessageSize), msg.cur_size);
-        msg.msg[msg.cur_size] = '\0';
-
-        msg.isLastData = i == (res_count - 1);
-
-        if ((m = write(connfd, (void*)&msg, sizeof(msg))) <= 0)
-        {
-            perror("write error");
-            return -1;
-        }
+        assert(data.size() == 1);
+        int status = Database::getInstance().addMessage(data[0].topic, data[0].msg);
+        string res = (status == -1) ? "NTO" : "OK";
+        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
     }
 
-    return 0;
+    void pushFileContents(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
+    {
+        vector<string> msgs;
+        for (auto &msg: data)
+            msgs.push_back(msg.msg);
+
+        int status = Database::getInstance().addMessages(data[0].topic, msgs);
+        string res = (status == -1) ? "NTO" : "OK";
+        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
+    }
+
+    void getAllTopics(int connfd, string& errMsg, bool &isConnectionClosed)
+    {
+        vector<string> topics = Database::getInstance().getAllTopics();
+        string res = topics.size() == 0 ? "NTO" : "OK";
+        SocketIO::client_writeData(connfd, res.c_str(), "", topics, errMsg, isConnectionClosed);
+    }
+
+    void getNextMessage(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
+    {
+        if (!Database::getInstance().topicExists(data[0].topic))
+        {
+            string res = "NTO";
+            SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
+            return;
+        }
+
+        auto time = data[0].time;
+        string msg = Database::getInstance().getNextMessage(data[0].topic, time);
+        string res = msg == "" ? "NMG" : "OK";
+        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {msg}, errMsg, isConnectionClosed, time);
+    }
 }
 
-void PublisherConnection(const SocketInfo& sockinfo)
+void ClientHandler(const SocketInfo& sockinfo)
 {
     while (true)
     {
@@ -108,29 +112,18 @@ void PublisherConnection(const SocketInfo& sockinfo)
         }
 
         if (strcmp(data[0].req, "CRE") == 0)
-        {
-            assert(data.size() == 1);
-            int status = Database::getInstance().addTopic(data[0].topic);
-            string res = (status == -1) ? "TAL" : "OK";
-            SocketIO::client_writeData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
-        }
+            RequestHandler::createTopic(data, sockinfo.connfd, errMsg, isConnectionClosed);
         else if (strcmp(data[0].req, "PUS") == 0)
-        {
-            assert(data.size() == 1);
-            int status = Database::getInstance().addMessage(data[0].topic, data[0].msg);
-            string res = (status == -1) ? "NTO" : "OK";
-            SocketIO::client_writeData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
-        }
+            RequestHandler::pushMessage(data, sockinfo.connfd, errMsg, isConnectionClosed);
         else if (strcmp(data[0].req, "FPU") == 0)
-        {
-            vector<string> msgs;
-            for (auto &msg: data)
-                msgs.push_back(msg.msg);
-
-            int status = Database::getInstance().addMessages(data[0].topic, msgs);
-            string res = (status == -1) ? "NTO" : "OK";
-            SocketIO::client_writeData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
-        }
+            RequestHandler::pushFileContents(data, sockinfo.connfd, errMsg, isConnectionClosed);
+        else if (strcmp(data[0].req, "GAT") == 0)
+            RequestHandler::getAllTopics(sockinfo.connfd, errMsg, isConnectionClosed);
+        else if (strcmp(data[0].req, "GNM") == 0)
+            RequestHandler::getNextMessage(data, sockinfo.connfd, errMsg, isConnectionClosed);
+        else if (strcmp(data[0].req, "GAM") == 0);
+        else
+            SocketIO::client_writeData(sockinfo.connfd, "ERR", "", {}, errMsg, isConnectionClosed);
 
         if (errMsg == "")
             continue;
@@ -142,12 +135,13 @@ void PublisherConnection(const SocketInfo& sockinfo)
     }
 }
 
-void SubscriberConnection(const SocketInfo& sockinfo)
+
+void ServerConnection(int connfd)
 {
-    
+
 }
 
-void ClientConnection(int connfd)
+void EstablishClient(int connfd)
 {
     int n = 1;
     SocketInfo sockinfo;
@@ -183,17 +177,11 @@ void ClientConnection(int connfd)
         return;
     }
     
-    if (strcmp(BUFF, "PUB") == 0)
+    if (strcmp(BUFF, "PUB") == 0 || strcmp(BUFF, "SUB") == 0)
     {
         strcpy(BUFF, "OK");
         write(connfd, BUFF, sizeof(BUFF));
-        PublisherConnection(sockinfo);
-    }
-    else if (strcmp(BUFF, "SUB") == 0)
-    {
-        strcpy(BUFF, "OK");
-        write(connfd, BUFF, sizeof(BUFF));
-        SubscriberConnection(sockinfo);
+        ClientHandler(sockinfo);
     }
     else
     {
@@ -204,11 +192,6 @@ void ClientConnection(int connfd)
 
     close(connfd);
     cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
-}
-
-void ServerConnection(int connfd)
-{
-
 }
 
 void serverOnLoad()
@@ -225,16 +208,12 @@ void serverOnLoad()
 	sigemptyset(&act.sa_mask);
 	act.sa_flags = 0;
 
-    cout << info->PORT << " " << 1 << endl;
-
     // Create a socket to receive the client connections
     info->listenSockInfo = SocketIO::makePassiveSocket(info->PORT);
 
     // synchronize with creator
     info->q->send_data(getppid(), getpid(), "msgsnd error");
     info->q->receive_data(getpid(), "msgrcv error");
-
-    cout << info->PORT << " " << 2 << endl;
 
     // asynchronously wait for connection
     pthread_t thread1, thread2;
@@ -285,7 +264,7 @@ void serverOnLoad()
             else
                 perror("accept error");
 
-        info->thread_pool.startOperation(info->listenSockInfo.connfd, ClientConnection);
+        info->thread_pool.startOperation(info->listenSockInfo.connfd, EstablishClient);
     }
 }
 

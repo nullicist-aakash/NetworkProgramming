@@ -107,7 +107,7 @@ private:
 		if (strcmp(res[0].req, "NTO") == 0)
 			errMsg = "Topic doesn't exist on server!!";
 		else if (strcmp(res[0].req, "ERR") == 0)
-			errMsg = "Unknown connection request!!";
+			errMsg = "Invalid request!!";
 		else if (strcmp(res[0].req, "TAL") == 0)
 			errMsg = "Topic already exists on server";
 		else

@@ -7,13 +7,14 @@
 #include <sys/wait.h>
 #include <arpa/inet.h>
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <algorithm>
+#include <chrono>
 #include <cassert>
 #include <fstream>
-#include "SocketIO.h"
+#include "helpers/SocketIO.h"
 
+#define MESSAGE_TIME_LIMIT 60
 using namespace std;
 
 #define CLEAR_INPUT { char c; while ((c = getchar()) != '\n' && c != '\r' && c != EOF); }
@@ -40,71 +41,113 @@ class Subscriber
 private:
 	const int socket;
 	string topic;
+	short_time t;
+
+    int getServerResponse(int socket, vector<ClientMessage> &result, string &errMsg) const
+	{
+		errMsg = "";
+		bool isConnectionClosed;
+		result = SocketIO::client_readData(socket, errMsg, isConnectionClosed);
+
+        if (isConnectionClosed)
+		{
+			cout << "Connection closed from server side!!" << endl;
+			exit(-1);
+		}
+
+        if (result.size() == 0)   // error
+        {
+			errMsg = "Unknown error occured!!";
+			return -1;
+		}
+
+		if (strcmp(result[0].req, "OK") == 0)
+			return 0;
+
+		if (strcmp(result[0].req, "NTO") == 0)
+			errMsg = "Topic doesn't exist on server!!";
+		else if (strcmp(result[0].req, "ERR") == 0)
+			errMsg = "Invalid request!!";
+		else if (strcmp(result[0].req, "TAL") == 0)
+			errMsg = "Topic already exist on server";
+		else if (strcmp(result[0].req, "NMG") == 0)
+			errMsg = "No more messages!!";
+		else
+			errMsg = "Unknown error occured!!";
+		
+		return -1;
+	}
 
 public:
 	Subscriber(int socket) : socket{socket}
 	{
 		
 	}
-	
-	void setTopic(const string &topic)
+
+	void registerTopic(string &topic)
 	{
 		this->topic = topic;
+		this->t = std::chrono::high_resolution_clock::now() - std::chrono::seconds(MESSAGE_TIME_LIMIT);
+		cout << DateTime(this->t) << endl;
 	}
 
-	bool isTopicSubscribed() const
+	int getAllTopics(vector<string> &topics, string &errMsg) const
 	{
-		return topic != "";
-	}
+		bool isConnectionClosed;
+		int snd_result = SocketIO::client_writeData(socket, "GAT", "", {}, errMsg, isConnectionClosed);
 
-	vector<string> getAllTopicsFromServer() const
-	{
-		Message m;
-		strcpy(m.req, "GET");
-		m.isLastData = true;
-
-		int n = write(socket, (void*)&m, sizeof(m) - sizeof(m.msg));
-		if (n <= 0)
+        if (isConnectionClosed)
 		{
-			perror("write error");
-			return {};
+			cout << "Connection closed from server side!!" << endl;
+			exit(-1);
 		}
 
-		string output;
-		int status = getServerResponse(output);
+		// write error
+		if (snd_result == -1)
+			return -1;
 
-		stringstream sstr(output);
-		string topic;
-		vector<string> out;
+		vector<ClientMessage> arr;
+		if (getServerResponse(socket, arr, errMsg) == -1)
+			return -1;
 
-		while (sstr)
-		{
-			getline(sstr >> std::ws, topic);
-
-			if (topic != "")
-				out.push_back(topic);
-			
-			topic = "";
-		}
-
-		return out;
-	}
-
-	int getNextMessage(string &message)
-	{
-		Message m;
-		strcpy(m.req, "GNE");
+		for (auto &x: arr)
+			topics.push_back(x.msg);
 		
+		return 0;
+	}
+
+	int getNextMessage(string& msg, string &errMsg)
+	{
+		bool isConnectionClosed;
+		int snd_result = SocketIO::client_writeData(socket, "GNM", topic.c_str(), {}, errMsg, isConnectionClosed, t);
+
+        if (isConnectionClosed)
+		{
+			cout << "Connection closed from server side!!" << endl;
+			exit(-1);
+		}
+
+		// write error
+		if (snd_result == -1)
+			return -1;
+
+		vector<ClientMessage> responses;
+
+		if (getServerResponse(socket, responses, errMsg) == -1)
+			return -1;
+
+		msg = responses[0].msg;
+		t = responses[0].time;
+		return 0;
 	}
 };
 
 void do_task(int sockfd)
 {
-	Subscriber p(sockfd);
+	Subscriber s(sockfd);
 
 	int option = -1;
 	char c = 0;
-	clock_t clk = -1;
 
 	while (1)
 	{
@@ -137,53 +180,50 @@ void do_task(int sockfd)
 		// perform the tasks
 		if (option == 1)
 		{
-			auto topics = p.getAllTopicsFromServer();
-
-			if (topics.size() == 0)
-				continue;
-
-			cout << "Following are the topics on server..." << endl;
-			cout << "0 : Go Back" << endl;
-			for (int i = 0; i < topics.size(); ++i)
-				cout << i + 1 << " : " << topics[i] << endl;
-
-			cout << "Select topic number: ";
-			int opt;
-			cin >> opt;
-
-			if (opt == 0)
-				continue;
-
-			if (opt < 0 || opt > topics.size())
+			string errMsg;
+			vector<string> topics;
+			
+			if (s.getAllTopics(topics, errMsg) == -1)
 			{
-				cout << "Invalid option selected!" << endl;
+				cout << errMsg << endl;
 				continue;
 			}
 
-			p.setTopic(topics[opt]);
+			cout << "0\t: Go Back" << endl;
+			for (int i = 0; i < topics.size(); ++i)
+				cout << "Topic " << i + 1 << "\t: "	<< topics[i] << endl;
+			
+			cout << endl << "Select an option: ";
+			int option;
+			cin >> option;
 
-			cout << "Topic selected: " << topics[opt] << endl;
+			if (option <= 0 || option > topics.size())
+				cout << endl << "No Option selected..." << endl;
+			else
+			{
+				s.registerTopic(topics[option - 1]);
+				cout << endl << "Topic selected: " << topics[option - 1] << endl;
+			}
+			
+			CLEAR_INPUT;
 		}
 
 		if (option == 2)
 		{
-			if (!p.isTopicSubscribed())
-			{
-				cout << "First subscribe to a topic!!" << endl;
-				continue;
-			}
+			string errMsg, msg;
+
+			if (s.getNextMessage(msg, errMsg) == -1)
+				cout << errMsg << endl;
+			else
+				cout << "Message Received: " << msg << endl;
+			CLEAR_INPUT;
 		}
 
 		if (option == 3)
 		{
-			if (!p.isTopicSubscribed())
-			{
-				cout << "First subscribe to a topic!!" << endl;
-				continue;
-			}
-
-
+			
 		}
+
 	}
 }
 
@@ -191,7 +231,7 @@ int main(int argc, char** argv)
 {
 	int sockfd;
 	struct sockaddr_in servaddr;
-
+	freopen("logs/Subscriber.log", "w", stderr);
 	if (argc != 3)
 	{
 		printf("usage: Subscriber.o <IPaddress> <PORT>\n");

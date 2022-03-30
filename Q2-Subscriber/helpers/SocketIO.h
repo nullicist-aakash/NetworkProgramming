@@ -3,50 +3,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <ctime>
+#include <chrono>
 
 using namespace std;
  
 const int maxMessageSize = 512;	
 const int maxTopicSize = 20;
 #define MAX_CONNECTION_COUNT 32
-
-const std::string currentDateTime();
-
-struct SocketInfo
-{
-    int sockfd;
-    int connfd;
-    struct sockaddr_in my_addr;
-    struct sockaddr_in dest_addr;
-};
-
-struct ClientMessageHeader
-{
-    bool isLastData;
-    clock_t time;
-    int cur_size;
-    char req[4];
-    char topic[maxTopicSize + 1];
-
-    
-	static bool isValidTopic(const string& topic)
-	{
-		return topic.size() <= maxTopicSize;
-	}
-};
-
-struct ClientMessage : ClientMessageHeader
-{
-    char msg[maxMessageSize + 1];
-
-    void print()
-    {
-        std::time_t t = std::time(0);
-        std::tm* now = std::localtime(&t);
-        cerr << currentDateTime() << " - { isLastData: " << isLastData << ", cur_size: " << cur_size << ", req: " << req << ", topic: " << topic << ", msg: " << msg << " }" << endl;
-    }
-};
 
 const std::string currentDateTime()
 {
@@ -60,6 +23,48 @@ const std::string currentDateTime()
     return buf;
 }
 
+const std::string DateTime(short_time time)
+{
+    time_t     now = std::chrono::system_clock::to_time_t(time);
+    struct tm  tstruct;
+    char       buf[80];
+    tstruct = *localtime(&now);
+    
+    strftime(buf, sizeof(buf), "%Y-%m-%d.%X", &tstruct);
+
+    return buf;
+}
+
+using short_time = std::chrono::_V2::system_clock::time_point;
+
+struct SocketInfo
+{
+    int sockfd;
+    int connfd;
+    struct sockaddr_in my_addr;
+    struct sockaddr_in dest_addr;
+};
+
+struct ClientMessageHeader
+{
+    bool isLastData;
+    short_time time;
+    char req[4];
+    char topic[maxTopicSize + 1];
+    int cur_size;
+};
+
+struct ClientMessage : ClientMessageHeader
+{
+    char msg[maxMessageSize + 1];
+};
+
+void print(ClientMessage& c)
+{
+    std::time_t t = std::time(0);
+    std::tm* now = std::localtime(&t);
+    cerr << currentDateTime() << " - { isLastData: " << c.isLastData << ", cur_size: " << c.cur_size << ", time: " << DateTime(c.time) << ", req: " << c.req << ", topic: " << c.topic << ", msg: " << c.msg << " }" << endl;
+}
 
 namespace SocketIO
 {
@@ -164,12 +169,13 @@ namespace SocketIO
 
             if (msg.cur_size == sizeof(ClientMessageHeader))
             {
+                cerr << n << " bytes read" << endl;
                 out.push_back(msg);
-                msg.print();
+                print(msg);
                 continue;
             }
 
-            n = read(connfd, (void*)&msg.msg, msg.cur_size - sizeof(ClientMessageHeader));
+            n = read(connfd, (void*)&(msg.msg), msg.cur_size - sizeof(ClientMessageHeader));
 
             if (n < 0)
             {
@@ -184,8 +190,11 @@ namespace SocketIO
                 return {};
             }
 
+            cerr << n + sizeof(ClientMessageHeader) << " bytes readed" << endl;
+            msg.msg[n] = '\0';
+            cerr << "'" << msg.msg << "'" << endl;
             out.push_back(msg);
-            msg.print();
+            print(msg);
         }
 
         return out;
@@ -200,7 +209,7 @@ namespace SocketIO
      * 2.   errMsg          = in case of error, this string contains the message to display on server side
      * 3.   return          = -1 in case of error, else 0
     */
-    int client_writeData(int connfd, const char* req, const char* topic, const vector<string>& msgs, string& errMsg, bool &closeConnection)
+    int client_writeData(int connfd, const char* req, const char* topic, const vector<string>& msgs, string& errMsg, bool &closeConnection, short_time clk = std::chrono::high_resolution_clock::now())
     {
         if(strlen(topic) > maxTopicSize)
         {
@@ -216,7 +225,7 @@ namespace SocketIO
         ClientMessage cli_msg;
         strcpy(cli_msg.req, req);
         strcpy(cli_msg.topic, topic);
-        cli_msg.time = clock();
+        cli_msg.time = clk;
 
         for (int i = 0; i < msgs.size(); ++i)
         {
@@ -236,7 +245,7 @@ namespace SocketIO
 
         for (auto &msg: msgs_to_send)
         {
-            msg.print();
+            print(msg);
             int n = write(connfd, (void*)&msg, msg.cur_size);
             
             if (n < 0)

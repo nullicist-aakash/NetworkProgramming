@@ -9,6 +9,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <chrono>
 #include <errno.h>
 #include <pthread.h>
 #include <sys/socket.h>
@@ -22,11 +23,14 @@ using namespace std;
 
 #define MESSAGE_TIME_LIMIT 60
 #define BULK_LIMIT 10
+using short_time = std::chrono::_V2::system_clock::time_point;
 
 class Database
 {
 private:
-    using pcs = pair<clock_t, string>;
+    using short_time = std::chrono::_V2::system_clock::time_point;
+    using pcs = pair<std::chrono::_V2::system_clock::time_point, string>;
+
     pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
     unordered_map<string, priority_queue<pcs, vector<pcs>, greater<pcs>>> mp;
 
@@ -40,11 +44,17 @@ private:
         pthread_mutex_unlock(&mutex);
     }
 
-    void removeOldMessages(const string &topic, const clock_t &time)
+    void removeOldMessages(const string &topic)
     {
         lock();
+        
+        auto time = std::chrono::high_resolution_clock::now();
 
-        while (!mp[topic].empty() && ((time - mp[topic].top().first) / CLOCKS_PER_SEC) > MESSAGE_TIME_LIMIT)
+        if (!mp[topic].empty())
+            cerr << "Top message has time difference: " << std::chrono::duration<double, std::milli>(time - mp[topic].top().first).count() << endl;
+
+        while (!mp[topic].empty() &&
+            std::chrono::duration<double, std::milli>(time - mp[topic].top().first).count() > MESSAGE_TIME_LIMIT * 1000)
             mp[topic].pop();
 
         unlock();
@@ -67,7 +77,7 @@ public:
     {
         if (topicExists(in_topic))
         {
-            cout << "Topic already exists!" << endl;
+            cerr << "Topic already exists!" << endl;
             return -1;
         }
         string topic(in_topic);
@@ -92,12 +102,11 @@ public:
         if (!topicExists(in_topic))
             return -1;
 
-        clock_t time = clock();
-        removeOldMessages(topic, time);
+        removeOldMessages(topic);
 
         lock();
 
-        mp[topic].push({time, message});
+        mp[topic].push({std::chrono::high_resolution_clock::now(), message});
 
         unlock();
         return 0;
@@ -109,32 +118,32 @@ public:
         if (!topicExists(in_topic))
             return -1;
 
-        clock_t time = clock();
-        removeOldMessages(topic, time);
+        removeOldMessages(topic);
         lock();
 
         for (auto &msg: msgs)
-            mp[topic].push({time, msg});
+            mp[topic].push({std::chrono::high_resolution_clock::now(), msg});
 
         unlock();
         return 0;
     }
 
-    const int getMessage(const char* in_topic, clock_t &clk, string &output)
+    string getNextMessage(const char* in_topic, short_time &clk)
     {
         string topic(in_topic);
-        output = "";
+        string output = "";
 
         if (!topicExists(in_topic))
-            return -1;
+            return "";
 
-        clock_t time = clock();
-        removeOldMessages(topic, time);
+        removeOldMessages(topic);
 
         lock();
 
         priority_queue<pcs> pq;
-        while (!mp[topic].empty() && mp[topic].top().first < clk)
+        cout << "Searching for time > " << DateTime(clk) << endl;
+
+        while (!mp[topic].empty() && mp[topic].top().first <= clk)
         {
             pq.push(mp[topic].top());
             mp[topic].pop();
@@ -154,18 +163,15 @@ public:
 
         unlock();
 
-        if (output == "")
-            return -1;
-        
-        return 0;
+        return output;
     }
 
     const vector<string> getBulkMessages(const char* in_topic)
     {
         if (!topicExists(in_topic))
             return {};
-        
-        removeOldMessages(in_topic, clock());
+
+        removeOldMessages(in_topic);
 
         lock();
         string topic(in_topic);
