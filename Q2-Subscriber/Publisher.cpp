@@ -11,14 +11,12 @@
 #include <algorithm>
 #include <cassert>
 #include <fstream>
+#include "SocketIO.h"
 
 using namespace std;
 
 #define CLEAR_INPUT { char c; while ((c = getchar()) != '\n' && c != '\r' && c != EOF); }
 #define PAUSE { printf("Press any key to continue...\n"); char c; scanf("%c", &c); }
-
-const int maxMessageSize = 512;	
-const int maxTopicSize = 20;
 
 void clear_screen()
 {
@@ -35,154 +33,6 @@ void clear_screen()
 	system("clear");
 #endif
 }
-
-struct ClientMessageHeader
-{
-    bool isLastData;
-    clock_t time;
-    int cur_size;
-    char req[4];
-    char topic[maxTopicSize + 1];
-};
-struct ClientMessage : ClientMessageHeader
-{
-    char msg[maxMessageSize + 1];
-
-    void print()
-    {
-        cout << "{ isLastData: " << isLastData << ", cur_size: " << cur_size << ", req: " << req << ", topic: " << topic << ", msg: " << msg << " }" << endl;
-    }
-};
-
-namespace SocketReader
-{
-    /* Preconditions:
-     * 1.                   = connfd is a valid file descriptor
-     *
-     * Postconditions:
-     * 1.   closeConnection = true means connection is closed prematurely from client side
-     * 2.   errMsg          = in case of error, this string contains the message to display on server side
-     * 3.   return          = array of data sent by client
-    */
-    vector<ClientMessage> readClientData(int connfd, string& errMsg, bool &closeConnection)
-    {
-        errMsg = "";
-        closeConnection = false;
-		
-
-        vector<ClientMessage> out;
-
-        ClientMessage msg;
-        msg.isLastData = false;
-        int n;
-
-        while (!msg.isLastData)
-        {
-            bzero((void*)&msg, sizeof(msg));
-            n = read(connfd, (void*)&msg, sizeof(ClientMessageHeader));
-
-            if (n < 0)
-            {
-                errMsg = "read error: " + string(strerror(errno));
-                return {};
-            }
-
-            if (n == 0)
-            {
-                errMsg = "read error: Connection closed prematurely";
-                closeConnection = true;
-                return {};
-            }
-
-            if (msg.cur_size == sizeof(ClientMessageHeader))
-            {
-                out.push_back(msg);
-				msg.print();
-				continue;
-            }
-
-            n = read(connfd, (void*)&msg.msg, msg.cur_size - sizeof(ClientMessageHeader));
-
-            if (n < 0)
-            {
-                errMsg = "read error: " + string(strerror(errno));
-                return {};
-            }
-
-            if (n == 0)
-            {
-                errMsg = "read error: Connection closed prematurely";
-                closeConnection = true;
-                return {};
-            }
-
-            out.push_back(msg);
-            msg.print();
-        }
-
-        return out;
-    }
-
-    /* Preconditions:
-     * 1.                   = connfd is a valid file descriptor
-     * 2.                   = req contains the request to send
-     * 3.                   = topic is the string which should be filled in topic field of message
-     * Postconditions:
-     * 1.   closeConnection = true means connection is closed prematurely from client side
-     * 2.   errMsg          = in case of error, this string contains the message to display on server side
-     * 3.   return          = -1 in case of error, else 0
-    */
-    int writeClientData(int connfd, const char* req, const char* topic, const vector<string>& msgs, string& errMsg, bool &closeConnection)
-    {
-        assert(strlen(topic) <= maxTopicSize);
-
-        errMsg = "";
-        closeConnection = false;
-
-        vector<ClientMessage> msgs_to_send;
-
-        ClientMessage cli_msg;
-        strcpy(cli_msg.req, req);
-        strcpy(cli_msg.topic, topic);
-        cli_msg.time = clock();
-
-        for (int i = 0; i < msgs.size(); ++i)
-        {
-            cli_msg.isLastData = i == (msgs.size() - 1);
-            cli_msg.cur_size = sizeof(ClientMessageHeader) + msgs[i].size();
-            strcpy(cli_msg.msg, msgs[i].c_str());
-            msgs_to_send.push_back(cli_msg);
-        }
-
-        if (msgs.size() == 0)
-        {
-            cli_msg.isLastData = true;
-            cli_msg.cur_size = sizeof(ClientMessageHeader);
-            msgs_to_send.push_back(cli_msg);
-        }
-
-        for (auto &msg: msgs_to_send)
-        {
-            msg.print();
-            int n = write(connfd, (void*)&msg, msg.cur_size);
-            
-            if (n < 0)
-            {
-                errMsg = "write error: " + string(strerror(errno));
-                return -1;
-            }
-
-            if (n == 0)
-            {
-                errMsg = "write error: Connection closed prematurely";
-                closeConnection = true;
-                return -1;
-            }
-        }
-
-        return 0;
-    }
-};
 
 class Topics
 {
@@ -246,7 +96,7 @@ private:
 	{
 		message = "";
 		bool isConnectionClosed;
-		auto res = SocketReader::readClientData(socket, message, isConnectionClosed);
+		auto res = SocketIO::readClientData(socket, message, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -284,7 +134,7 @@ public:
 			return -1;
 
 		bool isConnectionClosed;
-		int snd_result = SocketReader::writeClientData(socket, "CRE", topic.c_str(), {}, errMsg, isConnectionClosed);
+		int snd_result = SocketIO::writeClientData(socket, "CRE", topic.c_str(), {}, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -310,7 +160,7 @@ public:
 		}
 
 		bool isConnectionClosed;
-		int snd_result = SocketReader::writeClientData(socket, "PUS", topic.c_str(), {msg}, errMsg, isConnectionClosed);
+		int snd_result = SocketIO::writeClientData(socket, "PUS", topic.c_str(), {msg}, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -344,7 +194,7 @@ public:
 		}
 		
 		bool isConnectionClosed;
-		int snd_result = SocketReader::writeClientData(socket, "FPU", topic.c_str(), msgs, errMsg, isConnectionClosed);
+		int snd_result = SocketIO::writeClientData(socket, "FPU", topic.c_str(), msgs, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{

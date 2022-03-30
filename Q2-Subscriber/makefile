@@ -1,9 +1,9 @@
 compile:
 	@mkdir bin || true
 	@mkdir logs || true
-	@g++ -o bin/Broker.o Broker/driver.cpp -pthread
-	@g++ -o bin/Publisher.o Clients/Publisher.cpp -g
-	@g++ -o bin/Subscriber.o Clients/Subscriber.cpp -g
+	@g++ -o bin/Broker.o Broker.cpp -pthread
+	@g++ -o bin/Publisher.o Publisher.cpp -g
+	@g++ -o bin/Subscriber.o Subscriber.cpp -g
 
 info:
 	@netstat -a -o -n

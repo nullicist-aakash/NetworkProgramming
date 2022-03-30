@@ -17,14 +17,13 @@
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <arpa/inet.h>
+#include "SocketIO.h"
 using namespace std;
 
 #define MAX_CONNECTION_COUNT 32
 #define BULK_LIMIT 10
 #define MESSAGE_TIME_LIMIT 60
 
-const int maxMessageSize = 512;	
-const int maxTopicSize = 20;
 
 struct SocketInfo
 {
@@ -33,26 +32,7 @@ struct SocketInfo
     struct sockaddr_in my_addr;
     struct sockaddr_in dest_addr;
 };
-  
-struct ClientMessageHeader
-{
-    bool isLastData;
-    clock_t time;
-    int cur_size;
-    char req[4];
-    char topic[maxTopicSize + 1];
-};
-
-struct ClientMessage : ClientMessageHeader
-{
-    char msg[maxMessageSize + 1];
-
-    void print()
-    {
-        cerr << "{ isLastData: " << isLastData << ", cur_size: " << cur_size << ", req: " << req << ", topic: " << topic << ", msg: " << msg << " }" << endl;
-    }
-};
-
+ 
 typedef void Sigfunc(int);
 
 Sigfunc* Signal(int signo, Sigfunc* func)
@@ -140,136 +120,6 @@ public:
 };
 
 class Server;
-
-namespace SocketReader
-{
-    /* Preconditions:
-     * 1.                   = connfd is a valid file descriptor
-     *
-     * Postconditions:
-     * 1.   closeConnection = true means connection is closed prematurely from client side
-     * 2.   errMsg          = in case of error, this string contains the message to display on server side
-     * 3.   return          = array of data sent by client
-    */
-    vector<ClientMessage> readClientData(int connfd, string& errMsg, bool &closeConnection)
-    {
-        errMsg = "";
-        closeConnection = false;
-
-        vector<ClientMessage> out;
-
-        ClientMessage msg;
-        msg.isLastData = false;
-        int n;
-
-        while (!msg.isLastData)
-        {
-            bzero((void*)&msg, sizeof(msg));
-            n = read(connfd, (void*)&msg, sizeof(ClientMessageHeader));
-
-            if (n < 0)
-            {
-                errMsg = "read error: " + string(strerror(errno));
-                return {};
-            }
-
-            if (n == 0)
-            {
-                errMsg = "read error: Connection closed prematurely";
-                closeConnection = true;
-                return {};
-            }
-
-            if (msg.cur_size == sizeof(ClientMessageHeader))
-            {
-                out.push_back(msg);
-                msg.print();
-                continue;
-            }
-
-            n = read(connfd, (void*)&msg.msg, msg.cur_size - sizeof(ClientMessageHeader));
-
-            if (n < 0)
-            {
-                errMsg = "read error: " + string(strerror(errno));
-                return {};
-            }
-
-            if (n == 0)
-            {
-                errMsg = "read error: Connection closed prematurely";
-                closeConnection = true;
-                return {};
-            }
-
-            out.push_back(msg);
-            msg.print();
-        }
-
-        return out;
-    }
-
-    /* Preconditions:
-     * 1.                   = connfd is a valid file descriptor
-     * 2.                   = req contains the request to send
-     * 3.                   = topic is the string which should be filled in topic field of message
-     * Postconditions:
-     * 1.   closeConnection = true means connection is closed prematurely from client side
-     * 2.   errMsg          = in case of error, this string contains the message to display on server side
-     * 3.   return          = -1 in case of error, else 0
-    */
-    int writeClientData(int connfd, const char* req, const char* topic, const vector<string>& msgs, string& errMsg, bool &closeConnection)
-    {
-        assert(strlen(topic) <= maxTopicSize);
-
-        errMsg = "";
-        closeConnection = false;
-
-        vector<ClientMessage> msgs_to_send;
-
-        ClientMessage cli_msg;
-        strcpy(cli_msg.req, req);
-        strcpy(cli_msg.topic, topic);
-        cli_msg.time = clock();
-
-        for (int i = 0; i < msgs.size(); ++i)
-        {
-            cli_msg.isLastData = i == (msgs.size() - 1);
-            cli_msg.cur_size = sizeof(ClientMessageHeader) + msgs[i].size();
-            strcpy(cli_msg.msg, msgs[i].c_str());
-            msgs_to_send.push_back(cli_msg);
-        }
-
-        if (msgs.size() == 0)
-        {
-            cli_msg.isLastData = true;
-            cli_msg.cur_size = sizeof(ClientMessageHeader);
-            strcpy(cli_msg.msg, "");
-            msgs_to_send.push_back(cli_msg);
-        }
-
-        for (auto &msg: msgs_to_send)
-        {
-            msg.print();
-            int n = write(connfd, (void*)&msg, msg.cur_size);
-            
-            if (n < 0)
-            {
-                errMsg = "write error: " + string(strerror(errno));
-                return -1;
-            }
-
-            if (n == 0)
-            {
-                errMsg = "write error: Connection closed prematurely";
-                closeConnection = true;
-                return -1;
-            }
-        }
-
-        return 0;
-    }
-};
 
 template <class T>
 class ThreadPool
@@ -862,7 +712,7 @@ void PublisherConnection(Server* server, const SocketInfo& sockinfo)
         // wait to get data
         string errMsg;
         bool isConnectionClosed;
-        auto data = SocketReader::readClientData(sockinfo.connfd, errMsg, isConnectionClosed);
+        auto data = SocketIO::readClientData(sockinfo.connfd, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
             break;
@@ -878,14 +728,14 @@ void PublisherConnection(Server* server, const SocketInfo& sockinfo)
             assert(data.size() == 1);
             int status = server->database.addTopic(data[0].topic);
             string res = (status == -1) ? "TAL" : "OK";
-            SocketReader::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
+            SocketIO::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
         }
         else if (strcmp(data[0].req, "PUS") == 0)
         {
             assert(data.size() == 1);
             int status = server->database.addMessage(data[0].topic, data[0].msg);
             string res = (status == -1) ? "NTO" : "OK";
-            SocketReader::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
+            SocketIO::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
         }
         else if (strcmp(data[0].req, "FPU") == 0)
         {
@@ -895,7 +745,7 @@ void PublisherConnection(Server* server, const SocketInfo& sockinfo)
 
             int status = server->database.addMessages(data[0].topic, msgs);
             string res = (status == -1) ? "NTO" : "OK";
-            SocketReader::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
+            SocketIO::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
         }
 
         if (errMsg == "")

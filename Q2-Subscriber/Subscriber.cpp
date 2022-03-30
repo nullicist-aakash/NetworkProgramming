@@ -12,14 +12,12 @@
 #include <algorithm>
 #include <cassert>
 #include <fstream>
+#include "SocketIO.h"
 
 using namespace std;
 
 #define CLEAR_INPUT { char c; while ((c = getchar()) != '\n' && c != '\r' && c != EOF); }
 #define PAUSE { printf("Press any key to continue...\n"); char c; scanf("%c", &c); }
-
-const int maxMessageSize = 512;	
-const int maxTopicSize = 20;
 
 void clear_screen()
 {
