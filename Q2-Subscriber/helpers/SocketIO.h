@@ -9,6 +9,18 @@ using namespace std;
  
 const int maxMessageSize = 512;	
 const int maxTopicSize = 20;
+#define MAX_CONNECTION_COUNT 32
+
+const std::string currentDateTime();
+
+struct SocketInfo
+{
+    int sockfd;
+    int connfd;
+    struct sockaddr_in my_addr;
+    struct sockaddr_in dest_addr;
+};
+
 struct ClientMessageHeader
 {
     bool isLastData;
@@ -24,18 +36,6 @@ struct ClientMessageHeader
 	}
 };
 
-const std::string currentDateTime()
-{
-    time_t     now = std::time(0);
-    struct tm  tstruct;
-    char       buf[80];
-    tstruct = *localtime(&now);
-    
-    strftime(buf, sizeof(buf), "%Y-%m-%d.%X", &tstruct);
-
-    return buf;
-}
-
 struct ClientMessage : ClientMessageHeader
 {
     char msg[maxMessageSize + 1];
@@ -48,9 +48,83 @@ struct ClientMessage : ClientMessageHeader
     }
 };
 
+const std::string currentDateTime()
+{
+    time_t     now = std::time(0);
+    struct tm  tstruct;
+    char       buf[80];
+    tstruct = *localtime(&now);
+    
+    strftime(buf, sizeof(buf), "%Y-%m-%d.%X", &tstruct);
+
+    return buf;
+}
+
 
 namespace SocketIO
 {
+    SocketInfo activeConnect(const char* ip, int PORT)
+    {
+        SocketInfo info;
+        info.sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+        if (info.sockfd < 0)
+        {
+            perror("socket error");
+            exit(1);
+        }
+
+        memset(&info.dest_addr, 0, sizeof(info.dest_addr));
+        info.dest_addr.sin_family = AF_INET;
+        info.dest_addr.sin_port = htons(PORT);
+        info.dest_addr.sin_addr.s_addr = inet_addr(ip);
+
+        if (connect(info.sockfd, (struct sockaddr*)&info.dest_addr, sizeof(info.dest_addr)) < 0)
+        {
+            perror("connect error");
+            exit(1);
+        }
+
+        info.connfd = info.sockfd;
+        return info;
+    }
+
+    SocketInfo makePassiveSocket(int PORT)
+    {
+        SocketInfo info;
+
+        // make socket
+        if ((info.sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
+        {
+            perror("socker error");
+            exit(1);
+        }
+
+        // fill own port details
+        memset(&info.my_addr, 0, sizeof(info.my_addr));
+        info.my_addr.sin_family = AF_INET;
+        info.my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        info.my_addr.sin_port = htons(PORT);
+
+        // attach PORT to socket
+        if (bind(info.sockfd, (struct sockaddr*)&info.my_addr, sizeof(info.my_addr)) < 0)
+        {
+            perror("bind error");
+            exit(1);
+        }
+
+        cout << "Listening to PORT " << ntohs(info.my_addr.sin_port) << "..." << endl;
+
+        //  move from CLOSED to LISTEN state, create passive socket
+        if (listen(info.sockfd, MAX_CONNECTION_COUNT) < 0)
+        {
+            perror("listen error");
+            exit(1);
+        }
+
+        return info;
+    }
+
     /* Preconditions:
      * 1.                   = connfd is a valid file descriptor
      *

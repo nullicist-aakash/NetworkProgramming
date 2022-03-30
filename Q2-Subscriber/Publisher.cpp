@@ -142,7 +142,6 @@ public:
 
 	int sendMessage(const string& topic, const string& msg, string &errMsg)
 	{
-		cout << "Sending Topic: " << topic << " and msg: " << msg << endl;
 		if (msg.size() > maxMessageSize)
 		{
 			errMsg = "Message length should be less than " + to_string(maxMessageSize + 1) + " characters";
@@ -275,7 +274,7 @@ void do_task(int sockfd)
 
 			if (!inf)
 			{
-				cerr << "file open error" << endl;
+				cout << "File open error" << endl;
 				continue;
 			}
 
@@ -293,7 +292,7 @@ int main(int argc, char** argv)
 {
 	int sockfd;
 	struct sockaddr_in servaddr;
-
+	freopen("logs/Publisher.log", "w", stderr);
 	if (argc != 3)
 	{
 		printf("usage: Producer.o <IPaddress> <PORT>\n");
