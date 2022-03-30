@@ -91,6 +91,21 @@ namespace RequestHandler
         string res = msg == "" ? "NMG" : "OK";
         SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {msg}, errMsg, isConnectionClosed, time);
     }
+
+    void getAllMessages(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
+    {
+        if (!Database::getInstance().topicExists(data[0].topic))
+        {
+            string res = "NTO";
+            SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
+            return;
+        }
+
+        auto time = data.back().time;
+        auto msgs = Database::getInstance().getBulkMessages(data[0].topic, time);
+        string res = msgs.size() == 0 ? "NMG" : "OK";
+        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, msgs, errMsg, isConnectionClosed, time);
+    }
 }
 
 void ClientHandler(const SocketInfo& sockinfo)
@@ -121,7 +136,8 @@ void ClientHandler(const SocketInfo& sockinfo)
             RequestHandler::getAllTopics(sockinfo.connfd, errMsg, isConnectionClosed);
         else if (strcmp(data[0].req, "GNM") == 0)
             RequestHandler::getNextMessage(data, sockinfo.connfd, errMsg, isConnectionClosed);
-        else if (strcmp(data[0].req, "GAM") == 0);
+        else if (strcmp(data[0].req, "GAM") == 0)
+            RequestHandler::getAllMessages(data, sockinfo.connfd, errMsg, isConnectionClosed);
         else
             SocketIO::client_writeData(sockinfo.connfd, "ERR", "", {}, errMsg, isConnectionClosed);
 

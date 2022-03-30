@@ -141,7 +141,7 @@ public:
         lock();
 
         priority_queue<pcs> pq;
-        cout << "Searching for time > " << DateTime(clk) << endl;
+        cerr << "Searching for time > " << DateTime(clk) << endl;
 
         while (!mp[topic].empty() && mp[topic].top().first <= clk)
         {
@@ -166,36 +166,22 @@ public:
         return output;
     }
 
-    const vector<string> getBulkMessages(const char* in_topic)
+    const vector<string> getBulkMessages(const char* in_topic, short_time &clk)
     {
-        if (!topicExists(in_topic))
-            return {};
+        vector<string> msgs;
+        auto old = clk;
 
-        removeOldMessages(in_topic);
-
-        lock();
-        string topic(in_topic);
-
-        vector<pcs> temp;
         for (int i = 0; i < BULK_LIMIT; ++i)
         {
-            if (mp[topic].empty())
+            string s = getNextMessage(in_topic, clk);
+
+            if (s == "")
                 break;
             
-            temp.push_back(mp[topic].top());
-            mp[topic].pop();
+            msgs.push_back(s);
         }
 
-        vector<string> ans;
-        for (auto &x: temp)
-        {
-            ans.push_back(x.second);
-            mp[topic].push(x);
-        }
-
-        unlock();
-
-        return ans;
+        return msgs;
     }
 
     const vector<string> getAllTopics() const
@@ -207,4 +193,3 @@ public:
         return ret;
     }
 };
-

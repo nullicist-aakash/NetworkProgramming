@@ -140,6 +140,33 @@ public:
 		t = responses[0].time;
 		return 0;
 	}
+
+	int getBulkMessages(vector<string> &msgs, string &errMsg)
+	{
+		bool isConnectionClosed;
+		int snd_result = SocketIO::client_writeData(socket, "GAM", topic.c_str(), {}, errMsg, isConnectionClosed, t);
+
+        if (isConnectionClosed)
+		{
+			cout << "Connection closed from server side!!" << endl;
+			exit(-1);
+		}
+
+		// write error
+		if (snd_result == -1)
+			return -1;
+
+		vector<ClientMessage> responses;
+
+		if (getServerResponse(socket, responses, errMsg) == -1)
+			return -1;
+
+		for (auto &x: responses)
+			msgs.push_back(x.msg);
+
+		t = responses.back().time;
+		return 0;
+	}
 };
 
 void do_task(int sockfd)
@@ -221,7 +248,17 @@ void do_task(int sockfd)
 
 		if (option == 3)
 		{
-			
+			string errMsg;
+			vector<string> msgs;
+
+			if (s.getBulkMessages(msgs, errMsg) == -1)
+				cout << errMsg << endl;
+			else
+			{
+				for (int i = 0; i < msgs.size(); ++i)
+					cout << "Message " << i + 1 << ": " << msgs[i] << endl;
+			}
+			CLEAR_INPUT;
 		}
 
 	}

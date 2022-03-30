@@ -4,12 +4,14 @@
 #include <string.h>
 #include <unistd.h>
 #include <chrono>
+#define MAX_CONNECTION_COUNT 32
 
 using namespace std;
  
 const int maxMessageSize = 512;	
 const int maxTopicSize = 20;
-#define MAX_CONNECTION_COUNT 32
+
+using short_time = std::chrono::_V2::system_clock::time_point;
 
 const std::string currentDateTime()
 {
@@ -34,8 +36,6 @@ const std::string DateTime(short_time time)
 
     return buf;
 }
-
-using short_time = std::chrono::_V2::system_clock::time_point;
 
 struct SocketInfo
 {
