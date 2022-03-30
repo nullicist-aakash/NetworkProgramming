@@ -1,7 +1,9 @@
 #pragma once
 #include <iostream>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
+#include <ctime>
 
 using namespace std;
  
@@ -14,7 +16,25 @@ struct ClientMessageHeader
     int cur_size;
     char req[4];
     char topic[maxTopicSize + 1];
+
+    
+	static bool isValidTopic(const string& topic)
+	{
+		return topic.size() <= maxTopicSize;
+	}
 };
+
+const std::string currentDateTime()
+{
+    time_t     now = std::time(0);
+    struct tm  tstruct;
+    char       buf[80];
+    tstruct = *localtime(&now);
+    
+    strftime(buf, sizeof(buf), "%Y-%m-%d.%X", &tstruct);
+
+    return buf;
+}
 
 struct ClientMessage : ClientMessageHeader
 {
@@ -22,7 +42,9 @@ struct ClientMessage : ClientMessageHeader
 
     void print()
     {
-        cerr << "{ isLastData: " << isLastData << ", cur_size: " << cur_size << ", req: " << req << ", topic: " << topic << ", msg: " << msg << " }" << endl;
+        std::time_t t = std::time(0);
+        std::tm* now = std::localtime(&t);
+        cerr << currentDateTime() << " - { isLastData: " << isLastData << ", cur_size: " << cur_size << ", req: " << req << ", topic: " << topic << ", msg: " << msg << " }" << endl;
     }
 };
 
@@ -37,7 +59,7 @@ namespace SocketIO
      * 2.   errMsg          = in case of error, this string contains the message to display on server side
      * 3.   return          = array of data sent by client
     */
-    vector<ClientMessage> readClientData(int connfd, string& errMsg, bool &closeConnection)
+    vector<ClientMessage> client_readData(int connfd, string& errMsg, bool &closeConnection)
     {
         errMsg = "";
         closeConnection = false;
@@ -104,9 +126,13 @@ namespace SocketIO
      * 2.   errMsg          = in case of error, this string contains the message to display on server side
      * 3.   return          = -1 in case of error, else 0
     */
-    int writeClientData(int connfd, const char* req, const char* topic, const vector<string>& msgs, string& errMsg, bool &closeConnection)
+    int client_writeData(int connfd, const char* req, const char* topic, const vector<string>& msgs, string& errMsg, bool &closeConnection)
     {
-        assert(strlen(topic) <= maxTopicSize);
+        if(strlen(topic) > maxTopicSize)
+        {
+            errMsg = "Topic '" + string(topic) + "' length should be less than " + to_string(maxTopicSize + 1) + " characters";
+			return -1;
+        }
 
         errMsg = "";
         closeConnection = false;
@@ -155,4 +181,5 @@ namespace SocketIO
 
         return 0;
     }
+
 };

@@ -1,5 +1,4 @@
 #include <iostream>
-#include <functional>
 #include <unordered_map>
 #include <queue>
 #include <vector>
@@ -14,16 +13,15 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <sys/ipc.h>
-#include <sys/msg.h>
 #include <arpa/inet.h>
-#include "SocketIO.h"
+#include "helpers/SocketIO.h"
+#include "helpers/Database.h"
+#include "helpers/ThreadPool.h"
+#include "helpers/Queue.h"
+
 using namespace std;
 
 #define MAX_CONNECTION_COUNT 32
-#define BULK_LIMIT 10
-#define MESSAGE_TIME_LIMIT 60
-
 
 struct SocketInfo
 {
@@ -58,322 +56,11 @@ void sig_child(int signo)
 		printf("Child terminated: %d\n", pid);
 }
 
-template <class T>
-class Queue
-{
-private:
-    int qid;
-
-    struct my_msg
-    {
-        long mtype;
-        T data;
-    };
-
-public:
-    Queue(key_t id)
-    {
-        if (id == -1)
-        {
-            perror("ftok");
-            exit(-1);
-        }
-
-        qid = msgget(id, IPC_CREAT | 0660);
-
-        if (qid == -1)
-        {
-            perror("msgget");
-            exit(-1);
-        }
-    }
-
-    void send_data(int type, const T data, const char* errMsg = nullptr) const
-    {
-        my_msg msg { type, data };
-
-        if (msgsnd(qid, &msg, sizeof(msg) - sizeof(long), 0) == -1)
-        {
-            perror(errMsg == nullptr ? "msgsnd" : errMsg);
-            exit(-1);
-        }
-    }
-
-    T receive_data(int type, const char* errMsg = nullptr) const
-    {
-        my_msg msg;
-        
-        if (msgrcv(qid, &msg, sizeof(my_msg) - sizeof(long), type, 0) == -1)
-        {
-            perror(errMsg == nullptr ? "msgrcv" : errMsg);
-            exit(-1);
-        }
-
-        return msg.data;
-    }
-
-    ~Queue()
-    {
-        if (msgctl(qid, IPC_RMID, nullptr) == -1)
-                perror("msgctl");
-    }
-};
-
-class Server;
-
-template <class T>
-class ThreadPool
-{
-private:
-    const int nthreads;
-    Server* server;
-    T *clifd;
-    function<void(Server*, T)> *lambdas;
-
-    pthread_t *threads;
-    int iget, iput;
-
-    pthread_mutex_t clifd_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t clifd_cond = PTHREAD_COND_INITIALIZER;
-
-    static void* thread_main(void* arg)
-    {
-        ThreadPool* pool = (ThreadPool*)arg;
-        
-        while (1)
-        {
-            pthread_mutex_lock(&pool->clifd_mutex);
-
-            while (pool->iget == pool->iput)
-                pthread_cond_wait(&pool->clifd_cond, &pool->clifd_mutex);
-            
-            int index = pool->iget;
-
-            if (++pool->iget == pool->nthreads)
-                pool->iget = 0;
-
-            pthread_mutex_unlock(&pool->clifd_mutex);
-
-            int connfd = pool->clifd[index];
-
-            pool->lambdas[index](pool->server, connfd);
-            close(connfd);
-        }
-    }
-
-public:
-    ThreadPool(int num_threads, Server* server) : nthreads {num_threads}, server {server}
-    {
-        iget = iput = 0;
-        threads = new pthread_t[num_threads];
-        clifd = new int[num_threads];
-        lambdas = new function<void(Server*, T)>[num_threads];
-        for (int i = 0; i < num_threads; ++i)
-            lambdas[i] = nullptr;
-
-        for (int i = 0; i < num_threads; ++i)
-            pthread_create(&threads[i], NULL, &thread_main, (void*)this);
-    }
-
-    void startOperation(T &connfd, const std::function<void(Server*, int)> lambda)
-    {
-        pthread_mutex_lock(&clifd_mutex);
-        clifd[iput] = connfd;
-        lambdas[iput] = lambda;
-        
-        if (++iput == nthreads)
-            iput = 0;
-        
-        if (iput == iget)
-        {
-            cout << "iput = iget = " << iput << endl;
-            exit(1);
-        }
-
-        pthread_cond_signal(&clifd_cond);
-        pthread_mutex_unlock(&clifd_mutex);
-    }
-
-    ~ThreadPool()
-    {
-        delete[] clifd;
-        delete[] threads;
-    }
-};
-
-class Database
-{
-private:
-    using pcs = pair<clock_t, string>;
-    pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-    unordered_map<string, priority_queue<pcs, vector<pcs>, greater<pcs>>> mp;
-
-    inline void lock()
-    {
-        pthread_mutex_lock(&mutex);
-    }
-
-    inline void unlock()
-    {
-        pthread_mutex_unlock(&mutex);
-    }
-
-    void removeOldMessages(const string &topic, const clock_t &time)
-    {
-        lock();
-
-        while (!mp[topic].empty() && ((time - mp[topic].top().first) / CLOCKS_PER_SEC) > MESSAGE_TIME_LIMIT)
-            mp[topic].pop();
-
-        unlock();
-    }
-
-public:
-    int addTopic(const char* in_topic)
-    {
-        if (topicExists(in_topic))
-        {
-            cout << "Topic already exists!" << endl;
-            return -1;
-        }
-        string topic(in_topic);
-
-        lock();
-        mp[topic] = {};
-        unlock();
-        return 0;
-    }
-
-    inline bool topicExists(const char* in_topic) const
-    {
-        string topic(in_topic);
-        return mp.find(topic) != mp.end();
-    }
-
-    int addMessage(const char* in_topic, const char* in_message)
-    {
-        string topic(in_topic);
-        string message(in_message);
-
-        if (!topicExists(in_topic))
-            return -1;
-
-        clock_t time = clock();
-        removeOldMessages(topic, time);
-
-        lock();
-
-        mp[topic].push({time, message});
-
-        unlock();
-        return 0;
-    }
-
-    int addMessages(const char* in_topic, const vector<string> &msgs)
-    {
-        string topic(in_topic);
-        if (!topicExists(in_topic))
-            return -1;
-
-        clock_t time = clock();
-        removeOldMessages(topic, time);
-        lock();
-
-        for (auto &msg: msgs)
-            mp[topic].push({time, msg});
-
-        unlock();
-        return 0;
-    }
-
-    const int getMessage(const char* in_topic, clock_t &clk, string &output)
-    {
-        string topic(in_topic);
-        output = "";
-
-        if (!topicExists(in_topic))
-            return -1;
-
-        clock_t time = clock();
-        removeOldMessages(topic, time);
-
-        lock();
-
-        priority_queue<pcs> pq;
-        while (!mp[topic].empty() && mp[topic].top().first < clk)
-        {
-            pq.push(mp[topic].top());
-            mp[topic].pop();
-        }
-
-        if (!mp[topic].empty())
-        {
-            output = mp[topic].top().second;
-            clk = mp[topic].top().first;
-        }
-        
-        while (!pq.empty())
-        {
-            mp[topic].push(pq.top());
-            pq.pop();
-        }
-
-        unlock();
-
-        if (output == "")
-            return -1;
-        
-        return 0;
-    }
-
-    const vector<string> getBulkMessages(const char* in_topic)
-    {
-        if (!topicExists(in_topic))
-            return {};
-        
-        removeOldMessages(in_topic, clock());
-
-        lock();
-        string topic(in_topic);
-
-        vector<pcs> temp;
-        for (int i = 0; i < BULK_LIMIT; ++i)
-        {
-            if (mp[topic].empty())
-                break;
-            
-            temp.push_back(mp[topic].top());
-            mp[topic].pop();
-        }
-
-        vector<string> ans;
-        for (auto &x: temp)
-        {
-            ans.push_back(x.second);
-            mp[topic].push(x);
-        }
-
-        unlock();
-
-        return ans;
-    }
-
-    const vector<string> getAllTopics() const
-    {
-        vector<string> ret;
-        for (auto &[key, val]: mp)
-            ret.push_back(key);
-
-        return ret;
-    }
-};
-
 class Server
 {
 private:
     const Queue<int> *q;
-    ThreadPool<int> thread_pool;
-    Database database;
+    ThreadPool thread_pool;
 
     const int PORT, right_port;
     SocketInfo listenSockInfo;
@@ -456,7 +143,7 @@ private:
         return nullptr;
     }
 
-    static void ClientConnection(Server* server, int connfd)
+    static void ClientConnection(int connfd)
     {
         int n = 1;
         SocketInfo sockinfo;
@@ -491,18 +178,21 @@ private:
             cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
             return;
         }
+        
+        void PublisherConnection(const SocketInfo& sockinfo);
+        void SubscriberConnection(const SocketInfo& sockinfo);
 
         if (strcmp(BUFF, "PUB") == 0)
         {
             strcpy(BUFF, "OK");
             write(connfd, BUFF, sizeof(BUFF));
-            PublisherConnection(server, sockinfo);
+            PublisherConnection(sockinfo);
         }
         else if (strcmp(BUFF, "SUB") == 0)
         {
             strcpy(BUFF, "OK");
             write(connfd, BUFF, sizeof(BUFF));
-            SubscriberConnection(server, sockinfo);
+            SubscriberConnection(sockinfo);
         }
         else
         {
@@ -520,7 +210,7 @@ public:
         q{q}, 
         PORT { port }, 
         right_port {right}, 
-        thread_pool(32, this)
+        thread_pool(MAX_CONNECTION_COUNT)
     {
         freopen(("logs/" + to_string(port) + ".log").c_str(), "w", stderr);
     }
@@ -546,7 +236,7 @@ public:
         cout << PORT << " : Connected to port " << ntohs(rightSockInfo.dest_addr.sin_port) << endl;
 
         // assign thread to neighbours
-        void ServerConnection(Server* server, int connfd);
+        void ServerConnection(int connfd);
         neighbor_fds[0] = listenSockInfo.connfd;
         neighbor_fds[1] = rightSockInfo.connfd;
         thread_pool.startOperation(neighbor_fds[0], ServerConnection);
@@ -572,11 +262,9 @@ public:
         }
     }
 
-
-    friend int sendAllTopics(Server* server, int connfd);
-    friend void ServerConnection(Server* server, int connfd);
-    friend void SubscriberConnection(Server* server, const SocketInfo& sock);
-    friend void PublisherConnection(Server* server, const SocketInfo& sockinfo);
+    friend void ServerConnection(int connfd);
+    friend void SubscriberConnection(const SocketInfo&);
+    friend void PublisherConnection(const SocketInfo&);
 };
 
 class ServerInitialiser
@@ -651,10 +339,10 @@ public:
     }
 };
 
-int sendAllTopics(Server* server, int connfd)
+int sendAllTopics(int connfd)
 {
     string s;
-    for (auto &x: server->database.getAllTopics())
+    for (auto &x: Database::getInstance().getAllTopics())
         s += x + "\n";
 
     const char* s_str = s.c_str();
@@ -700,19 +388,19 @@ int sendAllTopics(Server* server, int connfd)
     return 0;
 }
 
-void ServerConnection(Server* server, int connfd)
+void ServerConnection(int connfd)
 {
 
 }
 
-void PublisherConnection(Server* server, const SocketInfo& sockinfo)
+void PublisherConnection(const SocketInfo& sockinfo)
 {
     while (true)
     {
         // wait to get data
         string errMsg;
         bool isConnectionClosed;
-        auto data = SocketIO::readClientData(sockinfo.connfd, errMsg, isConnectionClosed);
+        auto data = SocketIO::client_readData(sockinfo.connfd, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
             break;
@@ -726,16 +414,16 @@ void PublisherConnection(Server* server, const SocketInfo& sockinfo)
         if (strcmp(data[0].req, "CRE") == 0)
         {
             assert(data.size() == 1);
-            int status = server->database.addTopic(data[0].topic);
+            int status = Database::getInstance().addTopic(data[0].topic);
             string res = (status == -1) ? "TAL" : "OK";
-            SocketIO::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
+            SocketIO::client_writeData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
         }
         else if (strcmp(data[0].req, "PUS") == 0)
         {
             assert(data.size() == 1);
-            int status = server->database.addMessage(data[0].topic, data[0].msg);
+            int status = Database::getInstance().addMessage(data[0].topic, data[0].msg);
             string res = (status == -1) ? "NTO" : "OK";
-            SocketIO::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
+            SocketIO::client_writeData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
         }
         else if (strcmp(data[0].req, "FPU") == 0)
         {
@@ -743,9 +431,9 @@ void PublisherConnection(Server* server, const SocketInfo& sockinfo)
             for (auto &msg: data)
                 msgs.push_back(msg.msg);
 
-            int status = server->database.addMessages(data[0].topic, msgs);
+            int status = Database::getInstance().addMessages(data[0].topic, msgs);
             string res = (status == -1) ? "NTO" : "OK";
-            SocketIO::writeClientData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
+            SocketIO::client_writeData(sockinfo.connfd, res.c_str(), "", {}, errMsg, isConnectionClosed);
         }
 
         if (errMsg == "")
@@ -758,7 +446,7 @@ void PublisherConnection(Server* server, const SocketInfo& sockinfo)
     }
 }
 
-void SubscriberConnection(Server* server, const SocketInfo& sockinfo)
+void SubscriberConnection(const SocketInfo& sockinfo)
 {
     
 }

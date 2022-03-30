@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <cassert>
 #include <fstream>
-#include "SocketIO.h"
+#include "helpers/SocketIO.h"
 
 using namespace std;
 
@@ -65,11 +65,6 @@ public:
 	int addTopic(const string& topic, string& errMsg)
 	{
 		errMsg = "";
-		if (!isValidTopic(topic))
-		{
-			errMsg = "Topic '" + string(topic) + "' length should be less than " + to_string(maxTopicSize + 1) + " characters";
-			return -1;
-		}
 
 		list = new topicList(topic, list);
 		return 0;
@@ -90,13 +85,12 @@ class Publisher
 {
 private:
 	const int socket;
-	Topics topics;
 
-	int getServerResponse(string &message)
+    int getServerResponse(int socket, string &errMsg)
 	{
-		message = "";
+		errMsg = "";
 		bool isConnectionClosed;
-		auto res = SocketIO::readClientData(socket, message, isConnectionClosed);
+		auto res = SocketIO::client_readData(socket, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -111,13 +105,13 @@ private:
 			return 0;
 
 		if (strcmp(res[0].req, "NTO") == 0)
-			message = "Topic doesn't exist on server!! Create topic first";
+			errMsg = "Topic doesn't exist on server!!";
 		else if (strcmp(res[0].req, "ERR") == 0)
-			message = "Error storing message on server";
+			errMsg = "Unknown connection request!!";
 		else if (strcmp(res[0].req, "TAL") == 0)
-			message = "Topic already exists on server";
+			errMsg = "Topic already exists on server";
 		else
-			message = "Unknown error occured!!";
+			errMsg = "Unknown error occured!!";
 		
 		return -1;
 	}
@@ -128,13 +122,10 @@ public:
 		
 	}
 
-	int createTopic(string topic, string &errMsg)
+	int createTopic(const string& topic, string &errMsg)
 	{
-		if (topics.addTopic(topic, errMsg) == -1)
-			return -1;
-
 		bool isConnectionClosed;
-		int snd_result = SocketIO::writeClientData(socket, "CRE", topic.c_str(), {}, errMsg, isConnectionClosed);
+		int snd_result = SocketIO::client_writeData(socket, "CRE", topic.c_str(), {}, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -146,8 +137,7 @@ public:
 		if (snd_result == -1)
 			return -1;
 
-		
-		return getServerResponse(errMsg);
+		return getServerResponse(socket, errMsg);
 	}
 
 	int sendMessage(const string& topic, const string& msg, string &errMsg)
@@ -160,7 +150,7 @@ public:
 		}
 
 		bool isConnectionClosed;
-		int snd_result = SocketIO::writeClientData(socket, "PUS", topic.c_str(), {msg}, errMsg, isConnectionClosed);
+		int snd_result = SocketIO::client_writeData(socket, "PUS", topic.c_str(), {msg}, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -172,7 +162,7 @@ public:
 		if (snd_result == -1)
 			return -1;
 
-		return getServerResponse(errMsg);
+		return getServerResponse(socket, errMsg);
 	}
 
 	int sendFile(const string &topic, ifstream &inf, string &errMsg)
@@ -194,7 +184,7 @@ public:
 		}
 		
 		bool isConnectionClosed;
-		int snd_result = SocketIO::writeClientData(socket, "FPU", topic.c_str(), msgs, errMsg, isConnectionClosed);
+		int snd_result = SocketIO::client_writeData(socket, "FPU", topic.c_str(), msgs, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -206,7 +196,7 @@ public:
 		if (snd_result == -1)
 			return -1;
 
-		return getServerResponse(errMsg);
+		return getServerResponse(socket, errMsg);
 	}
 };
 

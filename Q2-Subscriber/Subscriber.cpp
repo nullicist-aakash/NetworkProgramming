@@ -38,74 +38,8 @@ void clear_screen()
 class Subscriber
 {
 private:
-	struct Message
-	{
-		char req[4];
-		bool isLastData;
-		clock_t time;
-		int size;
-		char topic[maxTopicSize + 1];
-		char msg[maxMessageSize + 1];
-	};
-
 	const int socket;
 	string topic;
-
-	int getServerResponse(string &output) const
-	{
-		output = "";
-		Message m;
-		m.isLastData = false;
-
-		while (!m.isLastData)
-		{
-			int n = read(socket, (char*)&m, sizeof(m));
-			if (n < 0)
-			{
-				perror("reply read error");
-				return -1;
-			}
-
-			if (n == 0)
-			{
-				cout << "Connection ended prematurely" << endl;
-				return -1;
-			}
-
-			if (strcmp(m.req, "OK") == 0)
-			{
-				m.msg[m.size] = '\0';
-				output += string(m.msg);
-			}
-		}
-
-		if (m.isLastData && strcmp(m.req, "OK") == 0)
-			return 0;
-		
-		
-		if (strcmp(m.req, "NTO") == 0)
-			cout << "Topics doesn't exist on server!!" << endl;
-		else if (strcmp(m.req, "ERR") == 0)
-			cout << "Some error occured on server" << endl;
-		else if (strcmp(m.req, "NMG") == 0)
-			cout << "No more messages on server" << endl;
-		else
-			cout << "Unknown error '" << m.req << "' occured!!" << endl;
-		
-		output = "";
-		return -1;
-	}
-
-	int sendDataToServer(Message& m, int size)
-	{
-		if (write(socket, (char*)&m, size) <= 0)
-		{
-			perror("write to server");
-			return -1;
-		}
-
-		return 0;
-	}
 
 public:
 	Subscriber(int socket) : socket{socket}
