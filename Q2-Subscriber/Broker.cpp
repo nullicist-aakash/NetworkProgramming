@@ -29,6 +29,7 @@ struct ServerInfo
     ThreadPool thread_pool;
 
     const int PORT, server_send_port, server_recv_port;
+    SocketInfo sendServerPORTInfo;
     SocketInfo listenSockInfo;
 
     ServerInfo(const Queue<int> *q, int port, int send, int recv) : 
@@ -42,8 +43,117 @@ struct ServerInfo
     }
 } *info;
 
+void printServerMessage(ServerMessage* servmsg)
+{
+    cerr << currentDateTime() << " - \t{ Source Server PORT: " << servmsg->sender_server_port << 
+            ", Source Server thread: " << servmsg->sender_thread_id << " }" << endl;
+
+    print(servmsg->cli_msg, true);
+}
+
+vector<ClientMessage>* receivedData;
+pthread_cond_t received_data_cond = PTHREAD_COND_INITIALIZER;
+
+void sendDataToServer(int sender_server_port, int sender_thread_id, const vector<ClientMessage>& msgs)
+{
+    static pthread_mutex_t send_data_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&send_data_mutex);
+    ServerMessage serv_msg;
+    serv_msg.sender_server_port = sender_server_port;
+    serv_msg.sender_thread_id = sender_thread_id;
+
+    for (auto &cli_msg: msgs)
+    {
+        int sz = sizeof(ServerMessage) - sizeof(ClientMessage) + cli_msg.cur_size;
+        memcpy(&serv_msg.cli_msg, &cli_msg, sz);
+        cerr << currentDateTime() << " - " << sz << " bytes wriiten to another server with PORT " << info->server_send_port << ". Content - " << endl;
+        printServerMessage(&serv_msg);
+
+        write(info->sendServerPORTInfo.connfd, (void*)&serv_msg, sz);
+    }
+
+    pthread_mutex_unlock(&send_data_mutex);
+}
+
+void* serveReceiveRequest(void* data)
+{
+    static pthread_mutex_t received_data_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_detach(pthread_self());
+
+    void** arr = (void**)data;
+    assert(arr[2] != NULL);
+
+    int sender_server_port = *(int*)arr[0];
+    int sender_thread_id = *(int*)arr[1];
+    auto msgs = (vector<ClientMessage>*)arr[2];
+
+    delete (int*)arr[0];
+    delete (int*)arr[1];
+    delete[] arr;
+
+    // if self port, signal child
+    if (sender_server_port == info->PORT)
+    {
+        receivedData = msgs;
+        pthread_mutex_lock(&received_data_mutex);
+        pthread_cond_signal(&info->thread_pool.getCondFromThreadID(sender_thread_id));
+        pthread_cond_wait(&received_data_cond, &received_data_mutex);
+        pthread_mutex_unlock(&received_data_mutex);
+        return NULL;
+    }
+
+    // simply forward data to other port for now
+    sendDataToServer(sender_server_port, sender_thread_id, *msgs);
+    delete msgs;
+
+    return NULL;
+}
+
 namespace RequestHandler
 {
+    vector<string> HandleSendingDataToNeighbour(int tid, vector<string> &in_msgs, const char* req, const char* topic, short_time clk = std::chrono::high_resolution_clock::now())
+    {
+        int sender_server_port = info->PORT;
+        int sender_thread_id = tid;
+
+        vector<ClientMessage> msgs_to_send;
+        ClientMessage msg;
+        strcpy(msg.req, req);
+        msg.time = clk;
+        strcpy(msg.topic, topic);
+        
+        for (int i = 0; i < in_msgs.size(); ++i)
+        {
+            msg.isLastData = i == (in_msgs.size() - 1);
+            msg.cur_size = sizeof(ClientMessageHeader) + in_msgs[i].size();
+            strcpy(msg.msg, in_msgs[i].c_str());
+            msgs_to_send.push_back(msg);
+        }
+
+        if (in_msgs.size() == 0)
+        {
+            msg.isLastData = true;
+            msg.cur_size = sizeof(ClientMessageHeader);
+            strcpy(msg.msg, "");
+            msgs_to_send.push_back(msg);
+        }
+
+        // Send the msgs
+        sendDataToServer(sender_server_port, sender_thread_id, msgs_to_send);
+
+        auto *mutex = &info->thread_pool.getMutexFromThreadID(tid);
+        auto *cond = &info->thread_pool.getCondFromThreadID(tid);
+
+        pthread_cond_wait(cond, mutex);
+
+        vector<string> ret;
+        for (auto &x: *receivedData)
+            ret.push_back(x.msg);
+
+        pthread_cond_signal(&received_data_cond);
+        return ret;
+    }
+
     void createTopic(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
     {
         assert(data.size() == 1);
@@ -75,6 +185,7 @@ namespace RequestHandler
     void getAllTopics(int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
     {
         vector<string> topics = Database::getInstance().getAllTopics();
+        topics = HandleSendingDataToNeighbour(threadid, topics, "GAT", "");
         string res = topics.size() == 0 ? "NTO" : "OK";
         SocketIO::client_writeData(connfd, res.c_str(), "", topics, errMsg, isConnectionClosed);
     }
@@ -108,63 +219,6 @@ namespace RequestHandler
         string res = msgs.size() == 0 ? "NMG" : "OK";
         SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, msgs, errMsg, isConnectionClosed, time);
     }
-}
-
-vector<ClientMessage>* receivedData;
-pthread_cond_t received_data_cond = PTHREAD_COND_INITIALIZER;
-
-void sendDataToServer(int sender_server_port, int sender_thread_id, const vector<ClientMessage>& msgs)
-{
-    static pthread_mutex_t send_data_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-    pthread_mutex_lock(&send_data_mutex);
-    ServerMessage serv_msg;
-    serv_msg.sender_server_port = sender_server_port;
-    serv_msg.sender_thread_id = sender_thread_id;
-
-    for (auto &cli_msg: msgs)
-    {
-        int sz = sizeof(ServerMessage) - sizeof(ClientMessage) + cli_msg.cur_size;
-        memcpy(&serv_msg.cli_msg, &cli_msg, sz);
-        
-        write(info->server_send_port, (void*)&serv_msg, sz);
-    }
-
-    pthread_mutex_unlock(&send_data_mutex);
-}
-
-void* serveReceiveRequest(void* data)
-{
-    static pthread_mutex_t received_data_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_detach(pthread_self());
-
-    void** arr = (void**)data;
-    assert(arr[2] != NULL);
-
-    int sender_server_port = *(int*)arr[0];
-    int sender_thread_id = *(int*)arr[1];
-    auto msgs = (vector<ClientMessage>*)arr[2];
-    
-    delete arr[0];
-    delete arr[1];
-    delete arr;
-
-    // if self port, signal child
-    if (sender_server_port == info->PORT)
-    {
-        receivedData = msgs;
-        pthread_mutex_lock(&received_data_mutex);
-        pthread_cond_signal(&info->thread_pool.getCondFromThreadID(sender_thread_id));
-        pthread_cond_wait(&received_data_cond, &received_data_mutex);
-        pthread_mutex_unlock(&received_data_mutex);
-        return NULL;
-    }
-
-    // simply forward data to other port for now
-    sendDataToServer(sender_server_port, sender_thread_id, *msgs);
-    free(msgs);
-    
-    return NULL;
 }
 
 // On access validation from a client
@@ -233,20 +287,23 @@ void recvHandler(int connfd, int threadId)
             
             if (msg.cli_msg.cur_size == sizeof(ClientMessageHeader))
             {
+                cerr << currentDateTime() << " - " << n << " bytes read from another server with PORT " << info->server_send_port << ". Content - " << endl;
+                printServerMessage(&msg);
+
                 out.push_back(msg.cli_msg);
                 continue;
             }
 
-            n = read(connfd, (void*)&(msg.cli_msg.msg), msg.cli_msg.cur_size - sizeof(ClientMessageHeader));
+            int n2 = read(connfd, (void*)&(msg.cli_msg.msg), msg.cli_msg.cur_size - sizeof(ClientMessageHeader));
+            cerr << currentDateTime() << " - " << n + n2 << " bytes from another server with PORT " << info->server_send_port << ". Content - " << endl;
+            printServerMessage(&msg);
+            
             msg.cli_msg.msg[n] = '\0';
             out.push_back(msg.cli_msg);
-
-            if (msg.cli_msg.isLastData)
-            {
-                sender_server_port = msg.sender_server_port;
-                sender_thread_id = msg.sender_thread_id;
-            }
         }
+
+        sender_server_port = msg.sender_server_port;
+        sender_thread_id = msg.sender_thread_id;
 
         // create a thread to start processing received data
         pthread_t thread;
@@ -254,6 +311,7 @@ void recvHandler(int connfd, int threadId)
         data[0] = new int { sender_server_port };
         data[1] = new int { sender_thread_id };
         data[2] = new vector<ClientMessage> { out };
+
         pthread_create(&thread, NULL, &serveReceiveRequest, (void*)data);
     }
 }
@@ -352,14 +410,14 @@ void serverOnLoad()
         }, (void*)&info->listenSockInfo);
 
     // make a new connection request
-    auto rightSockInfo = SocketIO::activeConnect("127.0.0.1", info->server_send_port);
+    info->sendServerPORTInfo = SocketIO::activeConnect("127.0.0.1", info->server_send_port);
     pthread_join(thread1, nullptr);
 
     cout << ntohs(info->listenSockInfo.my_addr.sin_port) << " : Connected to port " << ntohs(info->listenSockInfo.dest_addr.sin_port) << endl;
-    cout << info->PORT << " : Connected to port " << ntohs(rightSockInfo.dest_addr.sin_port) << endl;
+    cout << info->PORT << " : Connected to port " << ntohs(info->sendServerPORTInfo.dest_addr.sin_port) << endl;
 
     // assign thread to neighbours
-    info->thread_pool.startOperation(info->server_recv_port, recvHandler);
+    info->thread_pool.startOperation(info->listenSockInfo.connfd, recvHandler);
 
     // synchronize with creator
     info->q->send_data(getppid(), getpid(), "msgsnd error");
@@ -372,10 +430,12 @@ void serverOnLoad()
         socklen_t addrlen = sizeof(info->listenSockInfo.dest_addr);
 
         while ((info->listenSockInfo.connfd = accept(info->listenSockInfo.sockfd, (struct sockaddr*)&info->listenSockInfo.dest_addr, &addrlen)) < 0)
+        {
             if (errno == EINTR)
                 continue;
             else
                 perror("accept error");
+        }
 
         info->thread_pool.startOperation(info->listenSockInfo.connfd, clientConnectionHandler);
     }
@@ -434,7 +494,6 @@ int main(int argc, char** argv)
         queue.send_data(pids[i], 0, "msgsnd error from initialiser");
 
     delete[] pids;
-
 
     // Wait for all servers to finish
     for (int i = 0; i < count; ++i)

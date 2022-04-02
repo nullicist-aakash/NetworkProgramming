@@ -38,7 +38,7 @@ const std::string DateTime(short_time time)
     return buf;
 }
 
-struct __attribute__((__packed__)) SocketInfo
+struct SocketInfo
 {
     int sockfd;
     int connfd;
@@ -46,32 +46,32 @@ struct __attribute__((__packed__)) SocketInfo
     struct sockaddr_in dest_addr;
 };
 
-struct __attribute__((__packed__)) ClientMessageHeader
+struct ClientMessageHeader
 {
-    bool isLastData;
     short_time time;
+    bool isLastData;
     char req[4];
     char topic[maxTopicSize + 1];
     int cur_size;
 };
 
-struct __attribute__((__packed__)) ClientMessage : ClientMessageHeader
+struct ClientMessage : ClientMessageHeader
 {
     char msg[maxMessageSize + 1];
 };
 
-struct __attribute__((__packed__)) ServerMessage
+struct ServerMessage
 {
     int sender_server_port;
     int sender_thread_id;
     ClientMessage cli_msg;
 };
 
-void print(ClientMessage& c)
+void print(ClientMessage& c, bool isTab = false)
 {
     std::time_t t = std::time(0);
     std::tm* now = std::localtime(&t);
-    cerr << currentDateTime() << " - { isLastData: " << c.isLastData << ", cur_size: " << c.cur_size << ", time: " << DateTime(c.time) << ", req: " << c.req << ", topic: " << c.topic << ", msg: " << c.msg << " }" << endl;
+    cerr << currentDateTime() << " - " << (isTab ? "\t" : "") << "{ isLastData: " << c.isLastData << ", cur_size: " << c.cur_size << ", time: " << DateTime(c.time) << ", req: " << c.req << ", topic: " << c.topic << ", msg: " << c.msg << " }" << endl;
 }
 
 namespace SocketIO

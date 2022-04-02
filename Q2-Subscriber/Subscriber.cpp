@@ -111,7 +111,8 @@ public:
 			return -1;
 
 		for (auto &x: arr)
-			topics.push_back(x.msg);
+			if (strcmp(x.msg, "") != 0)
+				topics.push_back(x.msg);
 		
 		return 0;
 	}
