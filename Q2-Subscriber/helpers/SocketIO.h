@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <chrono>
+#include <pthread.h>
 #define MAX_CONNECTION_COUNT 32
 
 using namespace std;
@@ -37,7 +38,7 @@ const std::string DateTime(short_time time)
     return buf;
 }
 
-struct SocketInfo
+struct __attribute__((__packed__)) SocketInfo
 {
     int sockfd;
     int connfd;
@@ -45,7 +46,7 @@ struct SocketInfo
     struct sockaddr_in dest_addr;
 };
 
-struct ClientMessageHeader
+struct __attribute__((__packed__)) ClientMessageHeader
 {
     bool isLastData;
     short_time time;
@@ -54,9 +55,16 @@ struct ClientMessageHeader
     int cur_size;
 };
 
-struct ClientMessage : ClientMessageHeader
+struct __attribute__((__packed__)) ClientMessage : ClientMessageHeader
 {
     char msg[maxMessageSize + 1];
+};
+
+struct __attribute__((__packed__)) ServerMessage
+{
+    int sender_server_port;
+    int sender_thread_id;
+    ClientMessage cli_msg;
 };
 
 void print(ClientMessage& c)
@@ -169,7 +177,7 @@ namespace SocketIO
 
             if (msg.cur_size == sizeof(ClientMessageHeader))
             {
-                cerr << n << " bytes read" << endl;
+                cerr << n << " bytes of header read. No message." << endl;
                 out.push_back(msg);
                 print(msg);
                 continue;
@@ -190,7 +198,7 @@ namespace SocketIO
                 return {};
             }
 
-            cerr << n + sizeof(ClientMessageHeader) << " bytes readed" << endl;
+            cerr << n + sizeof(ClientMessageHeader) << " bytes readed. Message: ";
             msg.msg[n] = '\0';
             cerr << "'" << msg.msg << "'" << endl;
             out.push_back(msg);
@@ -264,5 +272,4 @@ namespace SocketIO
 
         return 0;
     }
-
 };

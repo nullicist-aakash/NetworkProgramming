@@ -2,6 +2,8 @@
 #include <unordered_map>
 #include <queue>
 #include <vector>
+#include <set>
+#include <map>
 #include <cassert>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,15 +28,15 @@ struct ServerInfo
     const Queue<int> *q;
     ThreadPool thread_pool;
 
-    const int PORT, right_port;
+    const int PORT, server_send_port, server_recv_port;
     SocketInfo listenSockInfo;
-    int neighbor_fds[2];
 
-    ServerInfo(const Queue<int> *q, int port, int right) : 
+    ServerInfo(const Queue<int> *q, int port, int send, int recv) : 
         q{q}, 
         PORT { port }, 
-        right_port {right}, 
-        thread_pool(MAX_CONNECTION_COUNT)
+        server_send_port {send},
+        server_recv_port {recv}, 
+        thread_pool(MAX_CONNECTION_COUNT + 1)
     {
 
     }
@@ -70,14 +72,14 @@ namespace RequestHandler
         SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
     }
 
-    void getAllTopics(int connfd, string& errMsg, bool &isConnectionClosed)
+    void getAllTopics(int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
     {
         vector<string> topics = Database::getInstance().getAllTopics();
         string res = topics.size() == 0 ? "NTO" : "OK";
         SocketIO::client_writeData(connfd, res.c_str(), "", topics, errMsg, isConnectionClosed);
     }
 
-    void getNextMessage(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
+    void getNextMessage(const vector<ClientMessage> &data, int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
     {
         if (!Database::getInstance().topicExists(data[0].topic))
         {
@@ -92,7 +94,7 @@ namespace RequestHandler
         SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {msg}, errMsg, isConnectionClosed, time);
     }
 
-    void getAllMessages(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
+    void getAllMessages(const vector<ClientMessage> &data, int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
     {
         if (!Database::getInstance().topicExists(data[0].topic))
         {
@@ -108,7 +110,65 @@ namespace RequestHandler
     }
 }
 
-void ClientHandler(const SocketInfo& sockinfo)
+vector<ClientMessage>* receivedData;
+pthread_cond_t received_data_cond = PTHREAD_COND_INITIALIZER;
+
+void sendDataToServer(int sender_server_port, int sender_thread_id, const vector<ClientMessage>& msgs)
+{
+    static pthread_mutex_t send_data_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+    pthread_mutex_lock(&send_data_mutex);
+    ServerMessage serv_msg;
+    serv_msg.sender_server_port = sender_server_port;
+    serv_msg.sender_thread_id = sender_thread_id;
+
+    for (auto &cli_msg: msgs)
+    {
+        int sz = sizeof(ServerMessage) - sizeof(ClientMessage) + cli_msg.cur_size;
+        memcpy(&serv_msg.cli_msg, &cli_msg, sz);
+        
+        write(info->server_send_port, (void*)&serv_msg, sz);
+    }
+
+    pthread_mutex_unlock(&send_data_mutex);
+}
+
+void* serveReceiveRequest(void* data)
+{
+    static pthread_mutex_t received_data_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_detach(pthread_self());
+
+    void** arr = (void**)data;
+    assert(arr[2] != NULL);
+
+    int sender_server_port = *(int*)arr[0];
+    int sender_thread_id = *(int*)arr[1];
+    auto msgs = (vector<ClientMessage>*)arr[2];
+    
+    delete arr[0];
+    delete arr[1];
+    delete arr;
+
+    // if self port, signal child
+    if (sender_server_port == info->PORT)
+    {
+        receivedData = msgs;
+        pthread_mutex_lock(&received_data_mutex);
+        pthread_cond_signal(&info->thread_pool.getCondFromThreadID(sender_thread_id));
+        pthread_cond_wait(&received_data_cond, &received_data_mutex);
+        pthread_mutex_unlock(&received_data_mutex);
+        return NULL;
+    }
+
+    // simply forward data to other port for now
+    sendDataToServer(sender_server_port, sender_thread_id, *msgs);
+    free(msgs);
+    
+    return NULL;
+}
+
+// On access validation from a client
+void serveClient(const SocketInfo& sockinfo, int threadid)
 {
     while (true)
     {
@@ -133,11 +193,11 @@ void ClientHandler(const SocketInfo& sockinfo)
         else if (strcmp(data[0].req, "FPU") == 0)
             RequestHandler::pushFileContents(data, sockinfo.connfd, errMsg, isConnectionClosed);
         else if (strcmp(data[0].req, "GAT") == 0)
-            RequestHandler::getAllTopics(sockinfo.connfd, errMsg, isConnectionClosed);
+            RequestHandler::getAllTopics(sockinfo.connfd, threadid, errMsg, isConnectionClosed);
         else if (strcmp(data[0].req, "GNM") == 0)
-            RequestHandler::getNextMessage(data, sockinfo.connfd, errMsg, isConnectionClosed);
+            RequestHandler::getNextMessage(data, sockinfo.connfd, threadid, errMsg, isConnectionClosed);
         else if (strcmp(data[0].req, "GAM") == 0)
-            RequestHandler::getAllMessages(data, sockinfo.connfd, errMsg, isConnectionClosed);
+            RequestHandler::getAllMessages(data, sockinfo.connfd, threadid, errMsg, isConnectionClosed);
         else
             SocketIO::client_writeData(sockinfo.connfd, "ERR", "", {}, errMsg, isConnectionClosed);
 
@@ -151,13 +211,54 @@ void ClientHandler(const SocketInfo& sockinfo)
     }
 }
 
+// Listening PORTS
 
-void ServerConnection(int connfd)
+void recvHandler(int connfd, int threadId)
 {
+    // Since this port is serialised, no out of order or mixed packets will come
+    vector<ClientMessage> out;
+    int sender_server_port;
+    int sender_thread_id;
+    ServerMessage msg;
 
+    while (1)
+    {
+        out.clear();
+        msg.cli_msg.isLastData = false;
+
+        while (!msg.cli_msg.isLastData)
+        {
+            bzero((void*)&msg, sizeof(msg));
+            int n = read(connfd, (void*)&msg, sizeof(msg) - sizeof(msg.cli_msg.msg));
+            
+            if (msg.cli_msg.cur_size == sizeof(ClientMessageHeader))
+            {
+                out.push_back(msg.cli_msg);
+                continue;
+            }
+
+            n = read(connfd, (void*)&(msg.cli_msg.msg), msg.cli_msg.cur_size - sizeof(ClientMessageHeader));
+            msg.cli_msg.msg[n] = '\0';
+            out.push_back(msg.cli_msg);
+
+            if (msg.cli_msg.isLastData)
+            {
+                sender_server_port = msg.sender_server_port;
+                sender_thread_id = msg.sender_thread_id;
+            }
+        }
+
+        // create a thread to start processing received data
+        pthread_t thread;
+        void** data = new void*[3];
+        data[0] = new int { sender_server_port };
+        data[1] = new int { sender_thread_id };
+        data[2] = new vector<ClientMessage> { out };
+        pthread_create(&thread, NULL, &serveReceiveRequest, (void*)data);
+    }
 }
 
-void EstablishClient(int connfd)
+void clientConnectionHandler(int connfd, int threadId)
 {
     int n = 1;
     SocketInfo sockinfo;
@@ -197,7 +298,7 @@ void EstablishClient(int connfd)
     {
         strcpy(BUFF, "OK");
         write(connfd, BUFF, sizeof(BUFF));
-        ClientHandler(sockinfo);
+        serveClient(sockinfo, threadId);
     }
     else
     {
@@ -251,18 +352,14 @@ void serverOnLoad()
         }, (void*)&info->listenSockInfo);
 
     // make a new connection request
-    auto rightSockInfo = SocketIO::activeConnect("127.0.0.1", info->right_port);
+    auto rightSockInfo = SocketIO::activeConnect("127.0.0.1", info->server_send_port);
     pthread_join(thread1, nullptr);
 
     cout << ntohs(info->listenSockInfo.my_addr.sin_port) << " : Connected to port " << ntohs(info->listenSockInfo.dest_addr.sin_port) << endl;
     cout << info->PORT << " : Connected to port " << ntohs(rightSockInfo.dest_addr.sin_port) << endl;
 
     // assign thread to neighbours
-    void ServerConnection(int connfd);
-    info->neighbor_fds[0] = info->listenSockInfo.connfd;
-    info->neighbor_fds[1] = rightSockInfo.connfd;
-    info->thread_pool.startOperation(info->neighbor_fds[0], ServerConnection);
-    info->thread_pool.startOperation(info->neighbor_fds[1], ServerConnection);
+    info->thread_pool.startOperation(info->server_recv_port, recvHandler);
 
     // synchronize with creator
     info->q->send_data(getppid(), getpid(), "msgsnd error");
@@ -280,7 +377,7 @@ void serverOnLoad()
             else
                 perror("accept error");
 
-        info->thread_pool.startOperation(info->listenSockInfo.connfd, EstablishClient);
+        info->thread_pool.startOperation(info->listenSockInfo.connfd, clientConnectionHandler);
     }
 }
 
@@ -308,7 +405,7 @@ int main(int argc, char** argv)
         pid_t pid;
         if ((pid = fork()) == 0)
         {
-            info = new ServerInfo { &queue, start_port + i, start_port + (i + 1) % count };
+            info = new ServerInfo { &queue, start_port + i, start_port + (i + 1) % count, start_port + (i - 1 + count) % count };
             freopen(("logs/" + to_string(info->PORT) + ".log").c_str(), "w", stderr);
             serverOnLoad();
             exit(0);

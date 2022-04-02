@@ -12,7 +12,9 @@ class ThreadPool
 private:
     const int nthreads;
     int *clifd;
-    function<void(int)> *lambdas;
+    function<void(int, int)> *lambdas;
+    pthread_mutex_t *thread_mutexes;
+    pthread_cond_t *thread_conds;
 
     pthread_t *threads;
     int iget, iput;
@@ -24,6 +26,11 @@ private:
 
 public:
     ThreadPool(int num_threads);
-    void startOperation(int &connfd, const std::function<void(int)> lambda);
+    void startOperation(const int &connfd, const std::function<void(int, int)> lambda);
+
+    pthread_mutex_t& getMutexFromThreadID(int);
+    pthread_cond_t& getCondFromThreadID(int);
+    int capacity() const;
+
     ~ThreadPool();
 };
