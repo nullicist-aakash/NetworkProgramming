@@ -74,6 +74,33 @@ void print(ClientMessage& c, bool isTab = false)
     cerr << currentDateTime() << " - " << (isTab ? "\t" : "") << "{ isLastData: " << c.isLastData << ", cur_size: " << c.cur_size << ", time: " << DateTime(c.time) << ", req: " << c.req << ", topic: " << c.topic << ", msg: " << c.msg << " }" << endl;
 }
 
+void printSizeInfo()
+{
+    ClientMessageHeader hdr;
+    ClientMessage cli_msg;
+    ServerMessage ser_msg;
+
+    cout << "Client Message Header Info" << endl;
+    cout << "Size: " << sizeof(ClientMessageHeader) << endl;
+    cout << "time                :     Size - " << sizeof(ClientMessageHeader::time) << ", Offset: " << ((char*)&hdr.time - (char*)&hdr) << endl; 
+    cout << "isLastData          :     Size - " << sizeof(ClientMessageHeader::isLastData) << ", Offset: " << ((char*)&hdr.isLastData - (char*)&hdr) << endl; 
+    cout << "req                 :     Size - " << sizeof(ClientMessageHeader::req) << ", Offset: " << ((char*)&hdr.req - (char*)&hdr) << endl; 
+    cout << "topic               :     Size - " << sizeof(ClientMessageHeader::topic) << ", Offset: " << ((char*)&hdr.topic - (char*)&hdr) << endl; 
+    cout << "cur_size            :     Size - " << sizeof(ClientMessageHeader::time) << ", Offset: " << ((char*)&hdr.cur_size - (char*)&hdr) << endl << endl;
+
+    
+    cout << "Client Message Info" << endl;
+    cout << "Size: " << sizeof(ClientMessage) << endl;
+    cout << "msg                 :     Size - " << sizeof(ClientMessage::msg) << ", Offset: " << ((char*)&cli_msg.msg - (char*)&cli_msg) << endl << endl;
+
+    cout << "Server Message Info" << endl;
+    cout << "Size: " << sizeof(ServerMessage) << endl;
+    cout << "sender_server_port  :     Size - " << sizeof(ServerMessage::sender_server_port) << ", Offset: " << ((char*)&ser_msg.sender_server_port - (char*)&ser_msg) << endl; 
+    cout << "sender_thread_id    :     Size - " << sizeof(ServerMessage::sender_thread_id) << ", Offset: " << ((char*)&ser_msg.sender_thread_id - (char*)&ser_msg) << endl; 
+    cout << "cli_msg             :     Size - " << sizeof(ServerMessage::cli_msg) << ", Offset: " << ((char*)&ser_msg.cli_msg - (char*)&ser_msg) << endl << endl;
+
+}
+
 namespace SocketIO
 {
     SocketInfo activeConnect(const char* ip, int PORT)

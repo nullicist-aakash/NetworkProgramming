@@ -75,6 +75,27 @@ void sendDataToServer(int sender_server_port, int sender_thread_id, const vector
     pthread_mutex_unlock(&send_data_mutex);
 }
 
+void sendDataToServer(int sender_server_port, int sender_thread_id, const ClientMessageHeader& header, vector<string>& msgs)
+{
+    vector<ClientMessage> packedmsgs;
+
+    ClientMessage packedmsg;
+    memcpy(&packedmsg, &header, sizeof(header));
+    if (msgs.size() == 0)
+        msgs.push_back("");
+
+    for (auto &msg: msgs)
+    {
+        int sz = msg.size() + sizeof(header);
+        strcpy(packedmsg.msg, msg.c_str());
+        packedmsg.cur_size = sz;
+
+        packedmsgs.push_back(packedmsg);
+    }
+
+    sendDataToServer(sender_server_port, sender_thread_id, packedmsgs);
+}
+
 void* serveReceiveRequest(void* data)
 {
     static pthread_mutex_t received_data_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -102,10 +123,29 @@ void* serveReceiveRequest(void* data)
         return NULL;
     }
 
-    // simply forward data to other port for now
-    sendDataToServer(sender_server_port, sender_thread_id, *msgs);
-    delete msgs;
+    // if Get all topics
+    if (strcmp(msgs->at(0).req, "GAT") == 0)
+    {
+        set<string> topics;
+        for (auto &x: *msgs)
+            topics.insert(x.msg);
+        
+        for (auto &x: Database::getInstance().getAllTopics())
+            topics.insert(x);
+        
+        vector<string> topics_to_send;
+        for (auto &x: topics)
+            if (x.size() != 0)
+                topics_to_send.push_back(x);
 
+        sendDataToServer(sender_server_port, sender_thread_id, (ClientMessageHeader)msgs->at(0), topics_to_send);
+    }
+    else
+    {
+        sendDataToServer(sender_server_port, sender_thread_id, *msgs);
+    }
+    
+    delete msgs;
     return NULL;
 }
 
@@ -283,11 +323,14 @@ void recvHandler(int connfd, int threadId)
         while (!msg.cli_msg.isLastData)
         {
             bzero((void*)&msg, sizeof(msg));
-            int n = read(connfd, (void*)&msg, sizeof(msg) - sizeof(msg.cli_msg.msg));
+            cerr << "Waiting to read from " << info->server_recv_port << endl;
+            int n = read(connfd, (void*)&msg, sizeof(msg) - sizeof(ClientMessage) + sizeof(ClientMessageHeader));
+            cerr << "\t(Received " << n << " bytes from " << info->server_recv_port << ")" << endl;
             
+
             if (msg.cli_msg.cur_size == sizeof(ClientMessageHeader))
             {
-                cerr << currentDateTime() << " - " << n << " bytes read from another server with PORT " << info->server_send_port << ". Content - " << endl;
+                cerr << currentDateTime() << " - " << n << " bytes read from another server with PORT " << info->server_recv_port << ". Content - " << endl;
                 printServerMessage(&msg);
 
                 out.push_back(msg.cli_msg);
@@ -443,6 +486,7 @@ void serverOnLoad()
 
 int main(int argc, char** argv)
 {
+    printSizeInfo();
     const Queue<int> queue { ftok(".", 'b') };
     int start_port;
     int count;

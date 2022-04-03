@@ -1,7 +1,7 @@
 compile:
 	@mkdir bin || true
 	@mkdir logs || true
-	@g++ -o bin/Broker.o Broker.cpp helpers/ThreadPool.cpp -pthread -fpic -fsanitize=address
+	@g++ -o bin/Broker.o Broker.cpp helpers/ThreadPool.cpp -pthread -fpic -fsanitize=address -static-libasan
 	@g++ -o bin/Publisher.o Publisher.cpp -g -fpic
 	@g++ -o bin/Subscriber.o Subscriber.cpp -g -fpic || true
 
