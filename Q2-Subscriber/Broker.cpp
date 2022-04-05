@@ -84,8 +84,11 @@ void sendDataToServer(int sender_server_port, int sender_thread_id, const short_
     if (msgs.size() == 0)
         msgs.push_back("");
 
-    for (auto &msg: msgs)
+    for (int i = 0; i < msgs.size(); ++i)
     {
+        auto &msg = msgs[i];
+        packedmsg.isLastData = (i == msgs.size() - 1);
+
         int sz = msg.size() + sizeof(header);
         strcpy(packedmsg.msg, msg.c_str());
         packedmsg.cur_size = sz;
@@ -111,7 +114,7 @@ void* serveReceiveRequest(void* data)
 
     delete (int*)arr[0];
     delete (int*)arr[1];
-    delete (int*)arr[2];
+    delete (short_time*)arr[2];
     delete[] arr;
 
     // if self port, signal child
