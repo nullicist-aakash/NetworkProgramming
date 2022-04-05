@@ -64,6 +64,7 @@ struct ServerMessage
 {
     int sender_server_port;
     int sender_thread_id;
+    short_time time_of_req;
     ClientMessage cli_msg;
 };
 

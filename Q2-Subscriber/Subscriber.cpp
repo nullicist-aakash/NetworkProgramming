@@ -71,7 +71,7 @@ private:
 		else if (strcmp(result[0].req, "TAL") == 0)
 			errMsg = "Topic already exist on server";
 		else if (strcmp(result[0].req, "NMG") == 0)
-			errMsg = "No more messages!!";
+			errMsg = "No messages related to this topic";
 		else
 			errMsg = "Unknown error occured!!";
 		

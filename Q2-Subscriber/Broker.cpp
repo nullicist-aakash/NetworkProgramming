@@ -54,7 +54,7 @@ void printServerMessage(ServerMessage* servmsg)
 vector<ClientMessage>* receivedData;
 pthread_cond_t received_data_cond = PTHREAD_COND_INITIALIZER;
 
-void sendDataToServer(int sender_server_port, int sender_thread_id, const vector<ClientMessage>& msgs)
+void sendDataToServer(int sender_server_port, int sender_thread_id, const short_time &time, const vector<ClientMessage>& msgs)
 {
     static pthread_mutex_t send_data_mutex = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_lock(&send_data_mutex);
@@ -75,7 +75,7 @@ void sendDataToServer(int sender_server_port, int sender_thread_id, const vector
     pthread_mutex_unlock(&send_data_mutex);
 }
 
-void sendDataToServer(int sender_server_port, int sender_thread_id, const ClientMessageHeader& header, vector<string>& msgs)
+void sendDataToServer(int sender_server_port, int sender_thread_id, const short_time &time, const ClientMessageHeader& header, vector<string>& msgs)
 {
     vector<ClientMessage> packedmsgs;
 
@@ -93,7 +93,7 @@ void sendDataToServer(int sender_server_port, int sender_thread_id, const Client
         packedmsgs.push_back(packedmsg);
     }
 
-    sendDataToServer(sender_server_port, sender_thread_id, packedmsgs);
+    sendDataToServer(sender_server_port, sender_thread_id, time, packedmsgs);
 }
 
 void* serveReceiveRequest(void* data)
@@ -106,10 +106,12 @@ void* serveReceiveRequest(void* data)
 
     int sender_server_port = *(int*)arr[0];
     int sender_thread_id = *(int*)arr[1];
-    auto msgs = (vector<ClientMessage>*)arr[2];
+    short_time time = *(short_time*)arr[2];
+    auto msgs = (vector<ClientMessage>*)arr[3];
 
     delete (int*)arr[0];
     delete (int*)arr[1];
+    delete (int*)arr[2];
     delete[] arr;
 
     // if self port, signal child
@@ -138,11 +140,11 @@ void* serveReceiveRequest(void* data)
             if (x.size() != 0)
                 topics_to_send.push_back(x);
 
-        sendDataToServer(sender_server_port, sender_thread_id, (ClientMessageHeader)msgs->at(0), topics_to_send);
+        sendDataToServer(sender_server_port, sender_thread_id, time, (ClientMessageHeader)msgs->at(0), topics_to_send);
     }
     else
     {
-        sendDataToServer(sender_server_port, sender_thread_id, *msgs);
+        sendDataToServer(sender_server_port, sender_thread_id, time, *msgs);
     }
     
     delete msgs;
@@ -151,7 +153,7 @@ void* serveReceiveRequest(void* data)
 
 namespace RequestHandler
 {
-    vector<string> HandleSendingDataToNeighbour(int tid, vector<string> &in_msgs, const char* req, const char* topic, short_time clk = std::chrono::high_resolution_clock::now())
+    vector<pair<string, short_time>> HandleSendingDataToNeighbour(int tid, vector<string> &in_msgs, const char* req, const char* topic, const short_time &clk = std::chrono::high_resolution_clock::now())
     {
         int sender_server_port = info->PORT;
         int sender_thread_id = tid;
@@ -159,7 +161,6 @@ namespace RequestHandler
         vector<ClientMessage> msgs_to_send;
         ClientMessage msg;
         strcpy(msg.req, req);
-        msg.time = clk;
         strcpy(msg.topic, topic);
         
         for (int i = 0; i < in_msgs.size(); ++i)
@@ -179,16 +180,16 @@ namespace RequestHandler
         }
 
         // Send the msgs
-        sendDataToServer(sender_server_port, sender_thread_id, msgs_to_send);
+        sendDataToServer(sender_server_port, sender_thread_id, clk, msgs_to_send);
 
         auto *mutex = &info->thread_pool.getMutexFromThreadID(tid);
         auto *cond = &info->thread_pool.getCondFromThreadID(tid);
 
         pthread_cond_wait(cond, mutex);
 
-        vector<string> ret;
+        vector<pair<string, short_time>> ret;
         for (auto &x: *receivedData)
-            ret.push_back(x.msg);
+            ret.push_back({ x.msg, x.time });
 
         pthread_cond_signal(&received_data_cond);
         return ret;
@@ -225,24 +226,58 @@ namespace RequestHandler
     void getAllTopics(int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
     {
         vector<string> topics = Database::getInstance().getAllTopics();
-        topics = HandleSendingDataToNeighbour(threadid, topics, "GAT", "");
+        auto ret  = HandleSendingDataToNeighbour(threadid, topics, "GAT", "");
+
+        for (auto &[topic, time]: ret)
+            topics.push_back(topic);
+
         string res = topics.size() == 0 ? "NTO" : "OK";
         SocketIO::client_writeData(connfd, res.c_str(), "", topics, errMsg, isConnectionClosed);
     }
 
     void getNextMessage(const vector<ClientMessage> &data, int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
     {
-        if (!Database::getInstance().topicExists(data[0].topic))
+        // check for existence of topic        
+        vector<string> topics = Database::getInstance().getAllTopics();
+        auto ret  = HandleSendingDataToNeighbour(threadid, topics, "GAT", "");
+
+        for (auto &[topic, time]: ret)
+            topics.push_back(topic);
+
+        bool topicExists = false;        
+        for (auto &topic: topics)
+            if (strcmp(topic.c_str(), data[0].topic) == 0)
+            {
+                topicExists = true;
+                break;
+            }
+
+        if (!topicExists && !Database::getInstance().topicExists(data[0].topic))
         {
             string res = "NTO";
             SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
             return;
         }
 
+        // topic exists on atleast one server. Send the message back
         auto time = data[0].time;
-        string msg = Database::getInstance().getNextMessage(data[0].topic, time);
-        string res = msg == "" ? "NMG" : "OK";
-        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {msg}, errMsg, isConnectionClosed, time);
+        vector<string> msgs;
+        ret = HandleSendingDataToNeighbour(threadid, msgs, "GNM", data[0].topic, time);
+
+        assert(ret.size() < 2);
+        string my_msg = Database::getInstance().getNextMessage(data[0].topic, time);
+        
+        if (ret.size() == 0)
+            ret.push_back({ my_msg, time });
+        else if (my_msg != "")
+            if (ret[0].second > time)
+            {
+                ret[0].first = my_msg;
+                ret[0].second = time;
+            }
+
+        string res = ret[0].first == "" ? "NMG" : "OK";
+        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {ret[0].first}, errMsg, isConnectionClosed, ret[0].second);
     }
 
     void getAllMessages(const vector<ClientMessage> &data, int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
@@ -311,8 +346,6 @@ void recvHandler(int connfd, int threadId)
 {
     // Since this port is serialised, no out of order or mixed packets will come
     vector<ClientMessage> out;
-    int sender_server_port;
-    int sender_thread_id;
     ServerMessage msg;
 
     while (1)
@@ -345,15 +378,17 @@ void recvHandler(int connfd, int threadId)
             out.push_back(msg.cli_msg);
         }
 
-        sender_server_port = msg.sender_server_port;
-        sender_thread_id = msg.sender_thread_id;
+        int sender_server_port = msg.sender_server_port;
+        int sender_thread_id = msg.sender_thread_id;
+        short_time time = msg.time_of_req;
 
         // create a thread to start processing received data
         pthread_t thread;
-        void** data = new void*[3];
+        void** data = new void*[4];
         data[0] = new int { sender_server_port };
         data[1] = new int { sender_thread_id };
-        data[2] = new vector<ClientMessage> { out };
+        data[2] = new short_time { time };
+        data[3] = new vector<ClientMessage> { out };
 
         pthread_create(&thread, NULL, &serveReceiveRequest, (void*)data);
     }
