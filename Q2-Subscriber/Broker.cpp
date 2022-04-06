@@ -46,7 +46,7 @@ struct ServerInfo
 void printServerMessage(ServerMessage* servmsg)
 {
     cerr << currentDateTime() << " - \t{ Source Server PORT: " << servmsg->sender_server_port << 
-            ", Source Server thread: " << servmsg->sender_thread_id << " }" << endl;
+            ", Source Server thread: " << servmsg->sender_thread_id << ", time: " << DateTime(servmsg->time_of_req) << " }" << endl;
 
     print(servmsg->cli_msg, true);
 }
@@ -61,6 +61,7 @@ void sendDataToServer(int sender_server_port, int sender_thread_id, const short_
     ServerMessage serv_msg;
     serv_msg.sender_server_port = sender_server_port;
     serv_msg.sender_thread_id = sender_thread_id;
+    serv_msg.time_of_req = time;
 
     for (auto &cli_msg: msgs)
     {
@@ -128,7 +129,7 @@ void* serveReceiveRequest(void* data)
         return NULL;
     }
 
-    // if Get all topics
+    // if get all topics
     if (strcmp(msgs->at(0).req, "GAT") == 0)
     {
         set<string> topics;
@@ -144,6 +145,19 @@ void* serveReceiveRequest(void* data)
                 topics_to_send.push_back(x);
 
         sendDataToServer(sender_server_port, sender_thread_id, time, (ClientMessageHeader)msgs->at(0), topics_to_send);
+    }
+    else if (strcmp(msgs->at(0).req, "GNM") == 0)
+    {
+        // if topic doesn't exist, simply forward
+        if (!Database::getInstance().topicExists(msgs->at(0).topic))
+            sendDataToServer(sender_server_port, sender_thread_id, time, *msgs);
+
+        // get the msg w.r.t. time
+        auto temp_time = time;
+        string my_msg = Database::getInstance().getNextMessage(msgs->at(0).topic, temp_time);
+
+        // update the time if latest is found
+        if (temp_time < msgs->at(0).time)
     }
     else
     {
@@ -165,6 +179,7 @@ namespace RequestHandler
         ClientMessage msg;
         strcpy(msg.req, req);
         strcpy(msg.topic, topic);
+        
         
         for (int i = 0; i < in_msgs.size(); ++i)
         {
@@ -255,7 +270,7 @@ namespace RequestHandler
                 break;
             }
 
-        if (!topicExists && !Database::getInstance().topicExists(data[0].topic))
+        if (!topicExists)
         {
             string res = "NTO";
             SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
