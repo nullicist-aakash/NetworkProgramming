@@ -28,6 +28,10 @@ struct ServerInfo
 {
     const Queue<int> *q;
     ThreadPool thread_pool;
+    pthread_mutex_t send_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t send_cond = PTHREAD_COND_INITIALIZER;
+    pthread_mutex_t recv_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t recv_cond = PTHREAD_COND_INITIALIZER;
 
     const int PORT, server_send_port, server_recv_port;
     SocketInfo sendServerPORTInfo;
@@ -43,6 +47,39 @@ struct ServerInfo
 
     }
 } *info;
+
+unordered_map<int, vector<ClientPayload>> serv_response;
+
+void accumulateResponses(int threadid, const short_time req_time, const vector<ClientPayload> &send_data)
+{
+    // prepare request for neighboring server
+    vector<ServerPayload> serv_payload;
+    for (auto &x: send_data)
+    {
+        ServerPayload p;
+        p.sender_server_port = info->PORT;
+        p.sender_thread_id = threadid;
+        p.request_time = req_time;
+
+        memcpy(&p.client_payload, &x, sizeof(ClientPayload));
+        serv_payload.push_back(p);
+    }
+
+    cerr << "Locking info->send_mutex" << endl;
+    // send request to neighboring server
+    pthread_mutex_lock(&info->send_mutex);
+    PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, serv_payload);
+    cerr << "Unlocking info->send_mutex" << endl;
+    pthread_mutex_unlock(&info->send_mutex);
+
+    // wait for the receive function to release the lock
+    cerr << "Waiting on thread mutex" << endl;
+    pthread_cond_wait(
+        &info->thread_pool.getCondFromThreadID(threadid), 
+        &info->thread_pool.getMutexFromThreadID(threadid));
+    cerr << getpid() << "\tSignaling receive mutex" << endl;
+    pthread_cond_signal(&info->recv_cond);
+}
 
 // On access validation from a client
 void clientHandler(const SocketInfo& sockinfo, int threadid)
@@ -122,11 +159,13 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
         }
         else if (data[0].msgType == MessageType::GET_ALL_TOPICS)
         {
+            cerr << "GET ALL TOPICS" << endl;
             ClientPayload payload;
             memset(&payload, 0, sizeof(payload));
             payload.time = current_time();
 
             auto topics = database.getAllTopics();
+
             if (topics.size() == 0)
             {
                 payload.msgType = MessageType::TOPIC_NOT_FOUND;
@@ -142,8 +181,11 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
                 strcpy(payload.topic, topic.c_str());
                 send_data.push_back(payload);
             }
-            
-            PresentationLayer::sendData(sockinfo.connfd, send_data, errMsg, isConnectionClosed);
+
+            accumulateResponses(threadid, data[0].time, send_data);
+
+            PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
+            serv_response[threadid].clear();
         }
         else if (data[0].msgType == MessageType::GET_NEXT_MESSAGE)
         {
@@ -162,8 +204,11 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
 
             strcpy(payload.msg, msg.c_str());
             payload.msgType = MessageType::SUCCESS;
-            
-            PresentationLayer::sendData(sockinfo.connfd, { payload }, errMsg, isConnectionClosed);
+
+            accumulateResponses(threadid, data[0].time, { payload });
+
+            PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
+            serv_response[threadid].clear();
         }
         else if (data[0].msgType == MessageType::GET_BULK_MESSAGES)
         {
@@ -190,7 +235,9 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
                 msgs_to_send.push_back(payload);
             }
 
-            PresentationLayer::sendData(sockinfo.connfd, msgs_to_send, errMsg, isConnectionClosed);
+            accumulateResponses(threadid, data[0].time, msgs_to_send);
+            PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
+            serv_response[threadid].clear();
         }
     }
 }
@@ -198,7 +245,101 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
 // Listening PORTS
 void recvHandler(int connfd, int threadId)
 {
-    
+    while (true)
+    {
+        auto data = PresentationLayer::getServerReq(connfd);
+        cerr << currentDateTime() << ": sizeof array read " << data.size() << endl;
+
+        if (data[0].sender_server_port == info->PORT)
+        {
+            int threadId = data[0].sender_thread_id;
+
+            // accumulate the results
+            serv_response[threadId].clear();
+
+            for (auto &x: data)
+                serv_response[threadId].push_back(x.client_payload);
+
+            cerr << getpid() << "\tLocking receive mutex" << endl;
+            pthread_mutex_lock(&info->recv_mutex);
+            cerr << "Signaling thread mutex" << endl;
+            pthread_cond_signal(&info->thread_pool.getCondFromThreadID(threadId));
+            cerr << getpid() << "\tWaiting receive mutex" << endl;
+            pthread_cond_wait(&info->recv_cond, &info->recv_mutex);
+            cerr << getpid() << "\tUnlocking receive mutex" << endl;
+            pthread_mutex_unlock(&info->recv_mutex);
+            continue;
+        }
+
+        // simply forward the data for now
+        cerr << "Locking info->send_mutex" << endl;
+        pthread_mutex_lock(&info->send_mutex);
+        PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, data);
+        cerr << "Unlocking info->send_mutex" << endl;
+        pthread_mutex_unlock(&info->send_mutex);
+    }
+}
+
+SocketInfo activeConnect(const char* ip, int PORT)
+{
+    SocketInfo info;
+    info.sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+    if (info.sockfd < 0)
+    {
+        perror("socket error");
+        exit(1);
+    }
+
+    memset(&info.dest_addr, 0, sizeof(info.dest_addr));
+    info.dest_addr.sin_family = AF_INET;
+    info.dest_addr.sin_port = htons(PORT);
+    info.dest_addr.sin_addr.s_addr = inet_addr(ip);
+
+    if (connect(info.sockfd, (struct sockaddr*)&info.dest_addr, sizeof(info.dest_addr)) < 0)
+    {
+        perror("connect error");
+        exit(1);
+    }
+
+    info.connfd = info.sockfd;
+    return info;
+}
+
+SocketInfo makePassiveSocket(int PORT)
+{
+    SocketInfo info;
+
+    // make socket
+    if ((info.sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
+    {
+        perror("socker error");
+        exit(1);
+    }
+
+    // fill own port details
+    memset(&info.my_addr, 0, sizeof(info.my_addr));
+    info.my_addr.sin_family = AF_INET;
+    info.my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    info.my_addr.sin_port = htons(PORT);
+
+    // attach PORT to socket
+    if (bind(info.sockfd, (struct sockaddr*)&info.my_addr, sizeof(info.my_addr)) < 0)
+    {
+        perror("bind error");
+        exit(1);
+    }
+
+    cout << "Listening to PORT " << ntohs(info.my_addr.sin_port) << "..." << endl;
+
+    //  move from CLOSED to LISTEN state, create passive socket
+    if (listen(info.sockfd, MAX_CONNECTION_COUNT) < 0)
+    {
+        perror("listen error");
+        exit(1);
+    }
+
+    return info;
 }
 
 void serverOnLoad()
@@ -216,34 +357,7 @@ void serverOnLoad()
 	act.sa_flags = 0;
 
     // Create a socket to receive the client connections
-    // make socket
-    if ((info->listenSockInfo.sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-    {
-        perror("socker error");
-        exit(1);
-    }
-
-    // fill own port details
-    memset(&info->listenSockInfo.my_addr, 0, sizeof(info->listenSockInfo.my_addr));
-    info->listenSockInfo.my_addr.sin_family = AF_INET;
-    info->listenSockInfo.my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    info->listenSockInfo.my_addr.sin_port = htons(info->PORT);
-
-    // attach PORT to socket
-    if (bind(info->listenSockInfo.sockfd, (struct sockaddr*)&info->listenSockInfo.my_addr, sizeof(info->listenSockInfo.my_addr)) < 0)
-    {
-        perror("bind error");
-        exit(1);
-    }
-
-    cout << "Listening to PORT " << ntohs(info->listenSockInfo.my_addr.sin_port) << "..." << endl;
-
-    //  move from CLOSED to LISTEN state, create passive socket
-    if (listen(info->listenSockInfo.sockfd, MAX_CONNECTION_COUNT) < 0)
-    {
-        perror("listen error");
-        exit(1);
-    }
+    info->listenSockInfo = makePassiveSocket(info->PORT);
 
     // synchronize with creator
     info->q->send_data(getppid(), getpid(), "msgsnd error");
@@ -253,7 +367,7 @@ void serverOnLoad()
     pthread_t thread1, thread2;
     
     // wait for a connection on another thread
-    pthread_create(&thread1, NULL, 
+    pthread_create(&thread1, nullptr, 
         [](void* data) -> void* 
         {
             SocketInfo* info = (SocketInfo*)data;
@@ -265,33 +379,11 @@ void serverOnLoad()
                 else
                     perror("accept error");
 
-            return NULL;
+            return nullptr;
         }, (void*)&info->listenSockInfo);
 
     // make a new connection request
-    const char* ip = "127.0.0.1";
-    info->sendServerPORTInfo.sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-
-    if (info->sendServerPORTInfo.sockfd < 0)
-    {
-        perror("socket error");
-        exit(1);
-    }
-
-    memset(&info->sendServerPORTInfo.dest_addr, 0, sizeof(info->sendServerPORTInfo.dest_addr));
-    info->sendServerPORTInfo.dest_addr.sin_family = AF_INET;
-    info->sendServerPORTInfo.dest_addr.sin_port = htons(info->server_send_port);
-    info->sendServerPORTInfo.dest_addr.sin_addr.s_addr = inet_addr(ip);
-
-    if (connect(info->sendServerPORTInfo.sockfd, (struct sockaddr*)&info->sendServerPORTInfo.dest_addr, sizeof(info->sendServerPORTInfo.dest_addr)) < 0)
-    {
-        perror("connect error");
-        exit(1);
-    }
-    info->sendServerPORTInfo.connfd = info->sendServerPORTInfo.sockfd;
-
-    // EVerything is successfully connected
-    
+    info->sendServerPORTInfo = activeConnect("127.0.0.1", info->server_send_port);
     pthread_join(thread1, nullptr);
 
     cout << ntohs(info->listenSockInfo.my_addr.sin_port) << " : Connected to port " << ntohs(info->listenSockInfo.dest_addr.sin_port) << endl;
@@ -398,7 +490,7 @@ int main(int argc, char** argv)
         if ((pid = fork()) == 0)
         {
             info = new ServerInfo { &queue, start_port + i, start_port + (i + 1) % count, start_port + (i - 1 + count) % count };
-//            freopen(("logs/" + to_string(info->PORT) + ".log").c_str(), "w", stderr);
+            freopen(("logs/" + to_string(info->PORT) + ".log").c_str(), "w", stderr);
             serverOnLoad();
             exit(0);
         }

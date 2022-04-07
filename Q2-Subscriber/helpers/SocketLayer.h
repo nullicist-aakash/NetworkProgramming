@@ -11,7 +11,7 @@ using short_time = std::chrono::_V2::system_clock::time_point;
 
 #define MAX_CONNECTION_COUNT 32
 const int maxMessageSize = 512;	
-const int maxTopicSize = 21;
+const int maxTopicSize = 26;
 
 
 struct SocketInfo

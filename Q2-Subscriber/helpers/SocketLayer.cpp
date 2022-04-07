@@ -29,15 +29,15 @@ vector<T> getGenericData(const int connfd, string &errMsg, bool &connectionClose
     {
         // set all fields to zero
         bzero(&header, sizeof(header));
-        int n = read(connfd, (void*)&header, sizeof(MSGHeader));
+        int n1 = read(connfd, (void*)&header, sizeof(MSGHeader));
 
-        if (n < 0)
+        if (n1 < 0)
         {
             errMsg = "read error: " + string(strerror(errno));
             return {};
         }
 
-        if (n == 0)
+        if (n1 == 0)
         {
             errMsg = "Connection closed from remote host";
             connectionClosed = true;
@@ -45,14 +45,15 @@ vector<T> getGenericData(const int connfd, string &errMsg, bool &connectionClose
         }
 
         T temp;
+        bzero(&temp, sizeof(T));
         int n2 = read(connfd, (void*)&temp, header.payload_size - sizeof(MSGHeader));
         ((char*)&temp)[n2] = '\0';
         payload.push_back(temp);
 
         if (!isServer)
-            cerr << currentDateTime() << ": Read " << n + n2 << " bytes from other end" << endl;
+            cerr << currentDateTime() << ": Read " << n1 + n2 << " bytes from other end" << endl;
         else
-            cerr << currentDateTime() << ": (Read " << n + n2 << " bytes from neighbor)" << endl;
+            cerr << currentDateTime() << ": (Read " << n1  << " + " <<  n2 << " bytes from neighbor)" << endl;
 
         printType(temp);
     }
@@ -61,7 +62,7 @@ vector<T> getGenericData(const int connfd, string &errMsg, bool &connectionClose
 }
 
 template <typename T>
-int sendGenericData(const int connfd, const vector<T> &msgs, function<int(T)> getSize, string &errMsg, bool &connectionClosed)
+int sendGenericData(const int connfd, const vector<T> &msgs, function<int(T)> getSize, string &errMsg, bool &connectionClosed, function<void(const T&)> printType, bool isServer)
 {
     errMsg = "";
     connectionClosed = false;
@@ -74,35 +75,43 @@ int sendGenericData(const int connfd, const vector<T> &msgs, function<int(T)> ge
         h.isLast = (i == (msgs.size() - 1));
         h.payload_size = sizeof(MSGHeader) + getSize(msgs[i]);
 
-        int n = write(connfd, (void*)&h, sizeof(h));
+        int n1 = write(connfd, (void*)&h, sizeof(h));
         
-        if (n < 0)
+        if (n1 < 0)
         {
             errMsg = "write error: " + string(strerror(errno));
             return -1;
         }
 
-        if (n == 0)
+        if (n1 == 0)
         {
             errMsg = "read error: Connection closed from remote host";
             connectionClosed = true;
             return -1;
         }
 
-        n = write(connfd, (void*)&msgs[i], h.payload_size - sizeof(MSGHeader));
+        int n2 = write(connfd, (void*)&msgs[i], h.payload_size - sizeof(MSGHeader));
     
-        if (n < 0)
+        if (n2 < 0)
         {
             errMsg = "write error: " + string(strerror(errno));
             return -1;
         }
 
-        if (n == 0)
+        if (n2 == 0)
         {
             errMsg = "read error: Connection closed from remote host";
             connectionClosed = true;
             return -1;
         }
+
+
+        if (!isServer)
+            cerr << currentDateTime() << ": Written " << n1 + n2 << " bytes to other end" << endl;
+        else
+            cerr << currentDateTime() << ": (Written " << n1  << " + " <<  n2 << " bytes to neighbor)" << endl;
+
+        printType(msgs[i]);
     }
 
     // success
@@ -114,20 +123,20 @@ namespace PresentationLayer
     vector<ClientPayload> getData(const int connfd, string &errMsg, bool &connectionClosed)
     {
         return getGenericData<ClientPayload>(connfd, errMsg, connectionClosed, 
-        [](ClientPayload &payload) -> void
-        {
-            char buff[sizeof(ClientPayload) + 50];
+            [](ClientPayload &payload) -> void
+            {
+                char buff[sizeof(ClientPayload) + 50];
 
-            sprintf(buff, 
-                "\t{ time: %s, msgType: %d, topic: '%s', msg: '%s' }",
-                DateTime(payload.time).c_str(),
-                payload.msgType,
-                payload.topic,
-                payload.msg
-                );
-            cerr << buff << endl;
-        },
-        false);
+                sprintf(buff, 
+                    "\t{ time: %s, msgType: %d, topic: '%s', msg: '%s' }",
+                    DateTime(payload.time).c_str(),
+                    payload.msgType,
+                    payload.topic,
+                    payload.msg
+                    );
+                cerr << buff << endl;
+            },
+            false);
     }
 
     int sendData(const int connfd, const vector<ClientPayload> &msgs, string &errMsg, bool &connectionClosed)
@@ -137,32 +146,51 @@ namespace PresentationLayer
             msgs, 
             [](ClientPayload payload) -> int { return getClientPayloadSize(payload); },
             errMsg,
-            connectionClosed);
+            connectionClosed, 
+            [](const ClientPayload &payload) -> void
+            {
+                char buff[sizeof(ClientPayload) + 50];
+
+                sprintf(buff, 
+                    "\t{ time: %s, msgType: %d, topic: '%s', msg: '%s' }",
+                    DateTime(payload.time).c_str(),
+                    payload.msgType,
+                    payload.topic,
+                    payload.msg
+                    );
+                cerr << buff << endl;
+            },
+            false);
     }
 
     vector<ServerPayload> getServerReq(const int connfd)
     {
         string x;
         bool y;
-        return getGenericData<ServerPayload>(connfd, x, y,
-        [](ServerPayload &payload) -> void
-        {
-            char buff[sizeof(ServerPayload) + 50];
+        auto a = getGenericData<ServerPayload>(connfd, x, y,
+            [](ServerPayload &payload) -> void
+            {
+                char buff[sizeof(ServerPayload) + 50];
 
-            sprintf(buff, 
-                "\t{ { sender_port: %d, sender_thread_id: %d, request_time: %s }, time: %s, msgType: %d, topic: '%s', msg: '%s' }",
-                payload.sender_server_port,
-                payload.sender_thread_id,
-                DateTime(payload.request_time).c_str(),
-                DateTime(payload.client_payload.time).c_str(),
-                payload.client_payload.msgType,
-                payload.client_payload.topic,
-                payload.client_payload.msg
-                );
+                sprintf(buff, 
+                    "\t{ { sender_port: %d, sender_thread_id: %d, request_time: %s }, time: %s, msgType: %d, topic: '%s', msg: '%s' }",
+                    payload.sender_server_port,
+                    payload.sender_thread_id,
+                    DateTime(payload.request_time).c_str(),
+                    DateTime(payload.client_payload.time).c_str(),
+                    payload.client_payload.msgType,
+                    payload.client_payload.topic,
+                    payload.client_payload.msg
+                    );
 
-            cerr << buff << endl;
-        },
-        true);
+                cerr << buff << endl;
+            },
+            true);
+
+        if (x != "")
+            cout << "error occured " << x << endl;
+            
+        return a;
     }
 
     void sendServerData(const int connfd, const vector<ServerPayload>&msgs)
@@ -176,9 +204,27 @@ namespace PresentationLayer
         sendGenericData<ServerPayload>(
             connfd, 
             msgs, 
-            [](ServerPayload payload) -> int { return sizeof(ServerPayload::request_time) + getClientPayloadSize(payload.client_payload); },
+            [](ServerPayload payload) -> int { return sizeof(ServerPayload) - sizeof(ClientPayload) + getClientPayloadSize(payload.client_payload); },
             x,
-            y);
+            y,
+            [](const ServerPayload &payload) -> void
+            {
+                char buff[sizeof(ServerPayload) + 50];
+
+                sprintf(buff, 
+                    "\t{ { sender_port: %d, sender_thread_id: %d, request_time: %s }, time: %s, msgType: %d, topic: '%s', msg: '%s' }",
+                    payload.sender_server_port,
+                    payload.sender_thread_id,
+                    DateTime(payload.request_time).c_str(),
+                    DateTime(payload.client_payload.time).c_str(),
+                    payload.client_payload.msgType,
+                    payload.client_payload.topic,
+                    payload.client_payload.msg
+                    );
+
+                cerr << buff << endl;
+            },
+            true);
         
         pthread_mutex_unlock(&send_data_mutex);
     }
