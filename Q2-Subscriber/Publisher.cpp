@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <cassert>
 #include <fstream>
-#include "helpers/SocketIO.h"
+#include "helpers/SocketLayer.h"
 
 using namespace std;
 
@@ -90,26 +90,23 @@ private:
 	{
 		errMsg = "";
 		bool isConnectionClosed;
-		auto res = SocketIO::client_readData(socket, errMsg, isConnectionClosed);
+		auto res = PresentationLayer::getData(socket, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
-			cout << "Connection closed from server side!!" << endl;
+			cout << "Connection closed!!" << endl;
 			exit(-1);
 		}
 
-        if (res.size() == 0)   // error
-            return -1;
-
-		if (strcmp(res[0].req, "OK") == 0)
+		if (res[0].msgType == MessageType::SUCCESS)
 			return 0;
 
-		if (strcmp(res[0].req, "NTO") == 0)
+		if (res[0].msgType == MessageType::TOPIC_NOT_FOUND)
 			errMsg = "Topic doesn't exist on server!!";
-		else if (strcmp(res[0].req, "ERR") == 0)
-			errMsg = "Invalid request!!";
-		else if (strcmp(res[0].req, "TAL") == 0)
+		else if (res[0].msgType == MessageType::TOPIC_ALREADY_EXISTS)
 			errMsg = "Topic already exists on server";
+		else if (res[0].msgType == MessageType::INVALID_TOPIC_NAME)
+			errMsg = "Invalid topic name sent!!";
 		else
 			errMsg = "Unknown error occured!!";
 		
@@ -125,7 +122,13 @@ public:
 	int createTopic(const string& topic, string &errMsg)
 	{
 		bool isConnectionClosed;
-		int snd_result = SocketIO::client_writeData(socket, "CRE", topic.c_str(), {}, errMsg, isConnectionClosed);
+
+		ClientPayload payload;
+		memset(&payload, 0, sizeof(payload));
+		payload.msgType = MessageType::CREATE_TOPIC;
+		strcpy(payload.topic, topic.c_str());
+
+		int snd_result = PresentationLayer::sendData(socket, { payload }, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -133,11 +136,7 @@ public:
 			exit(-1);
 		}
 
-		// write error
-		if (snd_result == -1)
-			return -1;
-
-		return getServerResponse(socket, errMsg);
+		return snd_result == -1 ? -1 : getServerResponse(socket, errMsg);
 	}
 
 	int sendMessage(const string& topic, const string& msg, string &errMsg)
@@ -149,7 +148,13 @@ public:
 		}
 
 		bool isConnectionClosed;
-		int snd_result = SocketIO::client_writeData(socket, "PUS", topic.c_str(), {msg}, errMsg, isConnectionClosed);
+		ClientPayload payload;
+		memset(&payload, 0, sizeof(payload));
+		payload.msgType = MessageType::PUSH_MESSAGE;
+		strcpy(payload.topic, topic.c_str());
+		strcpy(payload.msg, msg.c_str());
+
+		int snd_result = PresentationLayer::sendData(socket, { payload }, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -157,16 +162,17 @@ public:
 			exit(-1);
 		}
 
-		// write error
-		if (snd_result == -1)
-			return -1;
-
-		return getServerResponse(socket, errMsg);
+		return snd_result == -1 ? -1 : getServerResponse(socket, errMsg);
 	}
 
 	int sendFile(const string &topic, ifstream &inf, string &errMsg)
 	{
-		vector<string> msgs;
+		vector<ClientPayload> msgs;
+		ClientPayload payload;
+		memset(&payload, 0, sizeof(payload));
+		payload.msgType = MessageType::PUSH_FILE_CONTENTS;
+		strcpy(payload.topic, topic.c_str());	
+
 		while (inf)
 		{
 			string line;
@@ -179,11 +185,14 @@ public:
 			}
 
 			if (line != "")
-				msgs.push_back(line);
+			{
+				strcpy(payload.msg, line.c_str());
+				msgs.push_back(payload);
+			}
 		}
 		
 		bool isConnectionClosed;
-		int snd_result = SocketIO::client_writeData(socket, "FPU", topic.c_str(), msgs, errMsg, isConnectionClosed);
+		int snd_result = PresentationLayer::sendData(socket, msgs, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{

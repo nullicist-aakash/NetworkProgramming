@@ -12,10 +12,10 @@
 #include <chrono>
 #include <cassert>
 #include <fstream>
-#include "helpers/SocketIO.h"
+#include "helpers/SocketLayer.h"
 
-#define MESSAGE_TIME_LIMIT 60
 using namespace std;
+#define MESSAGE_TIME_LIMIT 60
 
 #define CLEAR_INPUT { char c; while ((c = getchar()) != '\n' && c != '\r' && c != EOF); }
 #define PAUSE { printf("Press any key to continue...\n"); char c; scanf("%c", &c); }
@@ -43,35 +43,27 @@ private:
 	string topic;
 	short_time t;
 
-    int getServerResponse(int socket, vector<ClientMessage> &result, string &errMsg) const
+    int getServerResponse(int socket, vector<ClientPayload> &res, string &errMsg) const
 	{
 		errMsg = "";
 		bool isConnectionClosed;
-		result = SocketIO::client_readData(socket, errMsg, isConnectionClosed);
+		res = PresentationLayer::getData(socket, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
-			cout << "Connection closed from server side!!" << endl;
+			cout << "Connection closed!!" << endl;
 			exit(-1);
 		}
 
-        if (result.size() == 0)   // error
-        {
-			errMsg = "Unknown error occured!!";
-			return -1;
-		}
-
-		if (strcmp(result[0].req, "OK") == 0)
+		if (res[0].msgType == MessageType::SUCCESS)
 			return 0;
 
-		if (strcmp(result[0].req, "NTO") == 0)
+		if (res[0].msgType == MessageType::TOPIC_NOT_FOUND)
 			errMsg = "Topic doesn't exist on server!!";
-		else if (strcmp(result[0].req, "ERR") == 0)
-			errMsg = "Invalid request!!";
-		else if (strcmp(result[0].req, "TAL") == 0)
-			errMsg = "Topic already exist on server";
-		else if (strcmp(result[0].req, "NMG") == 0)
-			errMsg = "No messages related to this topic";
+		else if (res[0].msgType == MessageType::TOPIC_ALREADY_EXISTS)
+			errMsg = "Topic already exists on server";
+		else if (res[0].msgType == MessageType::MESSAGE_NOT_FOUND)
+			errMsg = "No more messages for this topic";
 		else
 			errMsg = "Unknown error occured!!";
 		
@@ -88,13 +80,15 @@ public:
 	{
 		this->topic = topic;
 		this->t = std::chrono::high_resolution_clock::now() - std::chrono::seconds(MESSAGE_TIME_LIMIT);
-		cout << DateTime(this->t) << endl;
 	}
 
 	int getAllTopics(vector<string> &topics, string &errMsg) const
 	{
 		bool isConnectionClosed;
-		int snd_result = SocketIO::client_writeData(socket, "GAT", "", {}, errMsg, isConnectionClosed);
+		ClientPayload payload;
+		payload.msgType = MessageType::GET_ALL_TOPICS;
+		payload.msg[0] = '\0';
+		int snd_result = PresentationLayer::sendData(socket, { payload }, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -106,21 +100,28 @@ public:
 		if (snd_result == -1)
 			return -1;
 
-		vector<ClientMessage> arr;
-		if (getServerResponse(socket, arr, errMsg) == -1)
-			return -1;
+		vector<ClientPayload> res;
 
-		for (auto &x: arr)
-			if (strcmp(x.msg, "") != 0)
-				topics.push_back(x.msg);
+		if (getServerResponse(socket, res, errMsg) == -1)
+			return -1;
 		
+		topics.clear();
+		for (auto &x: res)
+			topics.push_back(string(x.topic));
+
 		return 0;
 	}
 
 	int getNextMessage(string& msg, string &errMsg)
 	{
 		bool isConnectionClosed;
-		int snd_result = SocketIO::client_writeData(socket, "GNM", topic.c_str(), {}, errMsg, isConnectionClosed, t);
+		ClientPayload payload;
+		payload.msgType = MessageType::GET_NEXT_MESSAGE;
+		strcpy(payload.topic, topic.c_str());
+		payload.time = t;
+		payload.msg[0] = '\0';
+		
+		int snd_result = PresentationLayer::sendData(socket, { payload }, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -132,7 +133,7 @@ public:
 		if (snd_result == -1)
 			return -1;
 
-		vector<ClientMessage> responses;
+		vector<ClientPayload> responses;
 
 		if (getServerResponse(socket, responses, errMsg) == -1)
 			return -1;
@@ -145,7 +146,13 @@ public:
 	int getBulkMessages(vector<string> &msgs, string &errMsg)
 	{
 		bool isConnectionClosed;
-		int snd_result = SocketIO::client_writeData(socket, "GAM", topic.c_str(), {}, errMsg, isConnectionClosed, t);
+		ClientPayload payload;
+		payload.msgType = MessageType::GET_ALL_MESSAGES;
+		payload.time = t;
+		strcpy(payload.topic, topic.c_str());
+		payload.msg[0] = '\0';
+
+		int snd_result = PresentationLayer::sendData(socket, { payload }, errMsg, isConnectionClosed);
 
         if (isConnectionClosed)
 		{
@@ -157,7 +164,7 @@ public:
 		if (snd_result == -1)
 			return -1;
 
-		vector<ClientMessage> responses;
+		vector<ClientPayload> responses;
 
 		if (getServerResponse(socket, responses, errMsg) == -1)
 			return -1;

@@ -11,11 +11,18 @@ const int maxTopicSize = 21;
 enum class MessageType
 {
     CREATE_TOPIC,
-    PUSH_TOPIC,
+    PUSH_MESSAGE,
     PUSH_FILE_CONTENTS,
     GET_ALL_TOPICS,
     GET_NEXT_MESSAGE,
-    GET_ALL_MESSAGES
+    GET_ALL_MESSAGES,
+
+    SUCCESS,
+    INVALID_TOPIC_NAME,
+    TOPIC_NOT_FOUND,
+    TOPIC_ALREADY_EXISTS,
+    MESSAGE_NOT_FOUND,
+    UNKNOWN_ERROR
 };
 
 struct MSGHeader
