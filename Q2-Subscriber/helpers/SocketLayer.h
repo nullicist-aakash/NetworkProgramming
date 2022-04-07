@@ -34,11 +34,13 @@ struct ClientPayload
 
 struct ServerPayload
 {
+    int sender_server_port;
+    int sender_thread_id;
     short_time request_time;
     ClientPayload client_payload;
 };
 
-namespace SocketLayer
+namespace PresentationLayer
 {
     std::vector<ClientPayload> getData(const int, std::string &, bool &);
 

@@ -156,8 +156,6 @@ void* serveReceiveRequest(void* data)
         auto temp_time = time;
         string my_msg = Database::getInstance().getNextMessage(msgs->at(0).topic, temp_time);
 
-        // update the time if latest is found
-        if (temp_time < msgs->at(0).time)
     }
     else
     {

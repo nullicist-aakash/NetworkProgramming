@@ -99,7 +99,7 @@ int sendGenericData(const int connfd, const vector<T> &msgs, function<int(T)> ge
     return 0;
 }
 
-namespace SocketLayer
+namespace PresentationLayer
 {
     vector<ClientPayload> getData(const int connfd, string &errMsg, bool &connectionClosed)
     {
@@ -128,11 +128,16 @@ namespace SocketLayer
         string x;
         bool y;
 
+        static pthread_mutex_t send_data_mutex = PTHREAD_MUTEX_INITIALIZER;
+        pthread_mutex_lock(&send_data_mutex);
+
         sendGenericData<ServerPayload>(
             connfd, 
             msgs, 
             [](ServerPayload payload) -> int { return sizeof(ServerPayload::request_time) + getClientPayloadSize(payload.client_payload); },
             x,
             y);
+        
+        pthread_mutex_unlock(&send_data_mutex);
     }
 }
