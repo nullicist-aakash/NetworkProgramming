@@ -12,6 +12,7 @@
 #include <cassert>
 #include <fstream>
 #include "helpers/SocketLayer.h"
+#include "helpers/Time.h"
 
 using namespace std;
 
@@ -92,6 +93,12 @@ private:
 		bool isConnectionClosed;
 		auto res = PresentationLayer::getData(socket, errMsg, isConnectionClosed);
 
+		if (res.size() == 0)
+		{
+			cout << errMsg << endl;
+			exit(-1);
+		}
+
         if (isConnectionClosed)
 		{
 			cout << "Connection closed!!" << endl;
@@ -126,6 +133,7 @@ public:
 		ClientPayload payload;
 		memset(&payload, 0, sizeof(payload));
 		payload.msgType = MessageType::CREATE_TOPIC;
+		payload.time = current_time();
 		strcpy(payload.topic, topic.c_str());
 
 		int snd_result = PresentationLayer::sendData(socket, { payload }, errMsg, isConnectionClosed);
@@ -151,6 +159,7 @@ public:
 		ClientPayload payload;
 		memset(&payload, 0, sizeof(payload));
 		payload.msgType = MessageType::PUSH_MESSAGE;
+		payload.time = current_time();
 		strcpy(payload.topic, topic.c_str());
 		strcpy(payload.msg, msg.c_str());
 
@@ -171,6 +180,7 @@ public:
 		ClientPayload payload;
 		memset(&payload, 0, sizeof(payload));
 		payload.msgType = MessageType::PUSH_FILE_CONTENTS;
+		payload.time = current_time();
 		strcpy(payload.topic, topic.c_str());	
 
 		while (inf)
@@ -270,7 +280,7 @@ void do_task(int sockfd)
 			if (p.sendMessage(topic, message, errMsg) == -1)
 				cout << errMsg << endl;
 			else
-				cout << "Successfully added topic to server" << endl;
+				cout << "Successfully added message to server" << endl;
 		}
 
 		if (option == 3)
@@ -291,7 +301,7 @@ void do_task(int sockfd)
 			if (p.sendFile(topic, inf, errMsg) == -1)
 				cout << errMsg << endl;
 			else
-				cout << "Successfully added topic to server" << endl;
+				cout << "Successfully added file contents to server" << endl;
 		}
 
 	}

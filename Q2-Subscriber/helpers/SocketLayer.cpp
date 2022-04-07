@@ -1,9 +1,12 @@
 #include "SocketLayer.h"
+#include "Time.h"
 #include <strings.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <cassert>
 #include <functional>
+#include <iostream>
 
 using namespace std;
 
@@ -13,7 +16,7 @@ inline int getClientPayloadSize(const ClientPayload& payload)
 }
 
 template <typename T>
-vector<T> getGenericData(const int connfd, string &errMsg, bool &connectionClosed)
+vector<T> getGenericData(const int connfd, string &errMsg, bool &connectionClosed, function<void(T&)> printType, bool isServer)
 {
     errMsg = "";
     connectionClosed = false;
@@ -36,15 +39,22 @@ vector<T> getGenericData(const int connfd, string &errMsg, bool &connectionClose
 
         if (n == 0)
         {
-            errMsg = "read error: Connection closed from remote host";
+            errMsg = "Connection closed from remote host";
             connectionClosed = true;
             return {};
         }
 
         T temp;
-        n = read(connfd, (void*)&temp, header.payload_size - sizeof(MSGHeader));
-        ((char*)&temp)[n] = '\0';
+        int n2 = read(connfd, (void*)&temp, header.payload_size - sizeof(MSGHeader));
+        ((char*)&temp)[n2] = '\0';
         payload.push_back(temp);
+
+        if (!isServer)
+            cerr << currentDateTime() << ": Read " << n + n2 << " bytes from other end" << endl;
+        else
+            cerr << currentDateTime() << ": (Read " << n + n2 << " bytes from neighbor)" << endl;
+
+        printType(temp);
     }
 
     return payload;
@@ -103,7 +113,21 @@ namespace PresentationLayer
 {
     vector<ClientPayload> getData(const int connfd, string &errMsg, bool &connectionClosed)
     {
-        return getGenericData<ClientPayload>(connfd, errMsg, connectionClosed);
+        return getGenericData<ClientPayload>(connfd, errMsg, connectionClosed, 
+        [](ClientPayload &payload) -> void
+        {
+            char buff[sizeof(ClientPayload) + 50];
+
+            sprintf(buff, 
+                "\t{ time: %s, msgType: %d, topic: '%s', msg: '%s' }",
+                DateTime(payload.time).c_str(),
+                payload.msgType,
+                payload.topic,
+                payload.msg
+                );
+            cerr << buff << endl;
+        },
+        false);
     }
 
     int sendData(const int connfd, const vector<ClientPayload> &msgs, string &errMsg, bool &connectionClosed)
@@ -120,7 +144,25 @@ namespace PresentationLayer
     {
         string x;
         bool y;
-        return getGenericData<ServerPayload>(connfd, x, y);
+        return getGenericData<ServerPayload>(connfd, x, y,
+        [](ServerPayload &payload) -> void
+        {
+            char buff[sizeof(ServerPayload) + 50];
+
+            sprintf(buff, 
+                "\t{ { sender_port: %d, sender_thread_id: %d, request_time: %s }, time: %s, msgType: %d, topic: '%s', msg: '%s' }",
+                payload.sender_server_port,
+                payload.sender_thread_id,
+                DateTime(payload.request_time).c_str(),
+                DateTime(payload.client_payload.time).c_str(),
+                payload.client_payload.msgType,
+                payload.client_payload.topic,
+                payload.client_payload.msg
+                );
+
+            cerr << buff << endl;
+        },
+        true);
     }
 
     void sendServerData(const int connfd, const vector<ServerPayload>&msgs)

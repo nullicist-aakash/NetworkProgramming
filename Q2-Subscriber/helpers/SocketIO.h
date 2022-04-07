@@ -14,17 +14,6 @@ const int maxTopicSize = 20;
 
 using short_time = std::chrono::_V2::system_clock::time_point;
 
-const std::string currentDateTime()
-{
-    time_t     now = std::time(0);
-    struct tm  tstruct;
-    char       buf[80];
-    tstruct = *localtime(&now);
-    
-    strftime(buf, sizeof(buf), "%Y-%m-%d.%X", &tstruct);
-
-    return buf;
-}
 
 const std::string DateTime(short_time time)
 {
@@ -130,41 +119,7 @@ namespace SocketIO
         return info;
     }
 
-    SocketInfo makePassiveSocket(int PORT)
-    {
-        SocketInfo info;
-
-        // make socket
-        if ((info.sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
-        {
-            perror("socker error");
-            exit(1);
-        }
-
-        // fill own port details
-        memset(&info.my_addr, 0, sizeof(info.my_addr));
-        info.my_addr.sin_family = AF_INET;
-        info.my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        info.my_addr.sin_port = htons(PORT);
-
-        // attach PORT to socket
-        if (bind(info.sockfd, (struct sockaddr*)&info.my_addr, sizeof(info.my_addr)) < 0)
-        {
-            perror("bind error");
-            exit(1);
-        }
-
-        cout << "Listening to PORT " << ntohs(info.my_addr.sin_port) << "..." << endl;
-
-        //  move from CLOSED to LISTEN state, create passive socket
-        if (listen(info.sockfd, MAX_CONNECTION_COUNT) < 0)
-        {
-            perror("listen error");
-            exit(1);
-        }
-
-        return info;
-    }
+    
 
     /* Preconditions:
      * 1.                   = connfd is a valid file descriptor

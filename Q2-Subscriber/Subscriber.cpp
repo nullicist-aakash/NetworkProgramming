@@ -13,6 +13,7 @@
 #include <cassert>
 #include <fstream>
 #include "helpers/SocketLayer.h"
+#include "helpers/Time.h"
 
 using namespace std;
 #define MESSAGE_TIME_LIMIT 60
@@ -49,6 +50,12 @@ private:
 		bool isConnectionClosed;
 		res = PresentationLayer::getData(socket, errMsg, isConnectionClosed);
 
+		if (res.size() == 0)
+		{
+			cout << errMsg << endl;
+			exit(-1);
+		}
+
         if (isConnectionClosed)
 		{
 			cout << "Connection closed!!" << endl;
@@ -79,7 +86,7 @@ public:
 	void registerTopic(string &topic)
 	{
 		this->topic = topic;
-		this->t = std::chrono::high_resolution_clock::now() - std::chrono::seconds(MESSAGE_TIME_LIMIT);
+		this->t = current_time() - std::chrono::seconds(MESSAGE_TIME_LIMIT);
 	}
 
 	int getAllTopics(vector<string> &topics, string &errMsg) const
@@ -87,6 +94,7 @@ public:
 		bool isConnectionClosed;
 		ClientPayload payload;
 		payload.msgType = MessageType::GET_ALL_TOPICS;
+		payload.time = current_time();
 		payload.msg[0] = '\0';
 		int snd_result = PresentationLayer::sendData(socket, { payload }, errMsg, isConnectionClosed);
 
@@ -147,7 +155,7 @@ public:
 	{
 		bool isConnectionClosed;
 		ClientPayload payload;
-		payload.msgType = MessageType::GET_ALL_MESSAGES;
+		payload.msgType = MessageType::GET_BULK_MESSAGES;
 		payload.time = t;
 		strcpy(payload.topic, topic.c_str());
 		payload.msg[0] = '\0';
