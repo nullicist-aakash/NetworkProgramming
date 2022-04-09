@@ -72,7 +72,7 @@ private:
 		else if (res[0].msgType == MessageType::MESSAGE_NOT_FOUND)
 			errMsg = "No more messages for this topic";
 		else
-			errMsg = "Unknown error occured!!";
+			errMsg = "Unknown error occured!!||||";
 		
 		return -1;
 	}

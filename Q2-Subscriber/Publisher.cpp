@@ -311,7 +311,6 @@ int main(int argc, char** argv)
 {
 	int sockfd;
 	struct sockaddr_in servaddr;
-	freopen("logs/Publisher.log", "w", stderr);
 	if (argc != 3)
 	{
 		printf("usage: Producer.o <IPaddress> <PORT>\n");
@@ -368,6 +367,7 @@ int main(int argc, char** argv)
 		exit(-1);
 	}
 
+	freopen("logs/Publisher.log", "w", stderr);
 	do_task(sockfd);
 	close(sockfd);
 

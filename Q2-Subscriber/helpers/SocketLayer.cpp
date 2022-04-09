@@ -57,7 +57,8 @@ vector<T> getGenericData(const int connfd, string &errMsg, bool &connectionClose
 
         printType(temp);
     }
-
+    
+    cerr << endl;
     return payload;
 }
 
@@ -113,8 +114,8 @@ int sendGenericData(const int connfd, const vector<T> &msgs, function<int(T)> ge
 
         printType(msgs[i]);
     }
-
-    // success
+    
+    cerr << endl;
     return 0;
 }
 
