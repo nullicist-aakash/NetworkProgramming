@@ -90,6 +90,13 @@ vector<ClientPayload> prepareLocalResponses(const vector<ClientPayload> &data)
     {
         cerr << "Request to add topic: " << data[0].topic << endl;
 
+        if (data[0].topic[0] == '\0')
+        {
+            cerr << "Invalid Topic Name!" << endl;
+            payload.msgType = MessageType::INVALID_TOPIC_NAME;
+            return { payload };
+        }
+
         if (database.addTopic(data[0].topic) == -1)
         {
             cerr << "Topic already exists!" << endl;
@@ -250,6 +257,7 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
                 ClientPayload getAllTopics;
                 getAllTopics.msgType = MessageType::GET_ALL_TOPICS;
                 getAllTopics.time = current_time();
+                getAllTopics.topic[0] = '\0';
                 accumulateResponses(threadid, {getAllTopics});
 
                 for (auto &x: serv_response[threadid])
