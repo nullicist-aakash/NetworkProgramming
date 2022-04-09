@@ -29,9 +29,6 @@ struct ServerInfo
     const Queue<int> *q;
     ThreadPool thread_pool;
     pthread_mutex_t send_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t send_cond = PTHREAD_COND_INITIALIZER;
-    pthread_mutex_t recv_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t recv_cond = PTHREAD_COND_INITIALIZER;
 
     const int PORT, server_send_port, server_recv_port;
     SocketInfo sendServerPORTInfo;
@@ -50,7 +47,7 @@ struct ServerInfo
 
 unordered_map<int, vector<ClientPayload>> serv_response;
 
-void accumulateResponses(int threadid, const short_time req_time, const vector<ClientPayload> &send_data)
+void accumulateResponses(int threadid, const vector<ClientPayload> &send_data)
 {
     // prepare request for neighboring server
     vector<ServerPayload> serv_payload;
@@ -59,7 +56,6 @@ void accumulateResponses(int threadid, const short_time req_time, const vector<C
         ServerPayload p;
         p.sender_server_port = info->PORT;
         p.sender_thread_id = threadid;
-        p.request_time = req_time;
 
         memcpy(&p.client_payload, &x, sizeof(ClientPayload));
         serv_payload.push_back(p);
@@ -78,7 +74,6 @@ void accumulateResponses(int threadid, const short_time req_time, const vector<C
         &info->thread_pool.getCondFromThreadID(threadid), 
         &info->thread_pool.getMutexFromThreadID(threadid));
     cerr << getpid() << "\tSignaling receive mutex" << endl;
-    pthread_cond_signal(&info->recv_cond);
 }
 
 // On access validation from a client
@@ -182,10 +177,10 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
                 send_data.push_back(payload);
             }
 
-            accumulateResponses(threadid, data[0].time, send_data);
+            serv_response[threadid].clear();
+            accumulateResponses(threadid, send_data);
 
             PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
-            serv_response[threadid].clear();
         }
         else if (data[0].msgType == MessageType::GET_NEXT_MESSAGE)
         {
@@ -205,7 +200,8 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
             strcpy(payload.msg, msg.c_str());
             payload.msgType = MessageType::SUCCESS;
 
-            accumulateResponses(threadid, data[0].time, { payload });
+            serv_response[threadid].clear();
+            accumulateResponses(threadid, { payload });
 
             PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
             serv_response[threadid].clear();
@@ -235,7 +231,8 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
                 msgs_to_send.push_back(payload);
             }
 
-            accumulateResponses(threadid, data[0].time, msgs_to_send);
+            serv_response[threadid].clear();
+            accumulateResponses(threadid, msgs_to_send);
             PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
             serv_response[threadid].clear();
         }
@@ -255,19 +252,13 @@ void recvHandler(int connfd, int threadId)
             int threadId = data[0].sender_thread_id;
 
             // accumulate the results
-            serv_response[threadId].clear();
 
+            serv_response[threadId].clear();
             for (auto &x: data)
                 serv_response[threadId].push_back(x.client_payload);
 
-            cerr << getpid() << "\tLocking receive mutex" << endl;
-            pthread_mutex_lock(&info->recv_mutex);
             cerr << "Signaling thread mutex" << endl;
             pthread_cond_signal(&info->thread_pool.getCondFromThreadID(threadId));
-            cerr << getpid() << "\tWaiting receive mutex" << endl;
-            pthread_cond_wait(&info->recv_cond, &info->recv_mutex);
-            cerr << getpid() << "\tUnlocking receive mutex" << endl;
-            pthread_mutex_unlock(&info->recv_mutex);
             continue;
         }
 

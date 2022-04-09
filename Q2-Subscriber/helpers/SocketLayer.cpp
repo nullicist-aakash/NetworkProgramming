@@ -51,9 +51,9 @@ vector<T> getGenericData(const int connfd, string &errMsg, bool &connectionClose
         payload.push_back(temp);
 
         if (!isServer)
-            cerr << currentDateTime() << ": Read " << n1 + n2 << " bytes from other end" << endl;
+            cerr << currentDateTime() << ": " << connfd << " - Read " << n1 + n2 << " bytes from other end" << endl;
         else
-            cerr << currentDateTime() << ": (Read " << n1  << " + " <<  n2 << " bytes from neighbor)" << endl;
+            cerr << currentDateTime() << ": " << connfd << " - (Read " << n1  << " + " <<  n2 << " bytes from neighbor)" << endl;
 
         printType(temp);
     }
@@ -107,9 +107,9 @@ int sendGenericData(const int connfd, const vector<T> &msgs, function<int(T)> ge
 
 
         if (!isServer)
-            cerr << currentDateTime() << ": Written " << n1 + n2 << " bytes to other end" << endl;
+            cerr << currentDateTime() << ": " << connfd << " - Written " << n1 + n2 << " bytes to other end" << endl;
         else
-            cerr << currentDateTime() << ": (Written " << n1  << " + " <<  n2 << " bytes to neighbor)" << endl;
+            cerr << currentDateTime() << ": " << connfd << " - (Written " << n1  << " + " <<  n2 << " bytes to neighbor)" << endl;
 
         printType(msgs[i]);
     }
@@ -173,10 +173,9 @@ namespace PresentationLayer
                 char buff[sizeof(ServerPayload) + 50];
 
                 sprintf(buff, 
-                    "\t{ { sender_port: %d, sender_thread_id: %d, request_time: %s }, time: %s, msgType: %d, topic: '%s', msg: '%s' }",
+                    "\t{ { sender_port: %d, sender_thread_id: %d }, time: %s, msgType: %d, topic: '%s', msg: '%s' }",
                     payload.sender_server_port,
                     payload.sender_thread_id,
-                    DateTime(payload.request_time).c_str(),
                     DateTime(payload.client_payload.time).c_str(),
                     payload.client_payload.msgType,
                     payload.client_payload.topic,
@@ -212,10 +211,9 @@ namespace PresentationLayer
                 char buff[sizeof(ServerPayload) + 50];
 
                 sprintf(buff, 
-                    "\t{ { sender_port: %d, sender_thread_id: %d, request_time: %s }, time: %s, msgType: %d, topic: '%s', msg: '%s' }",
+                    "\t{ { sender_port: %d, sender_thread_id: %d }, time: %s, msgType: %d, topic: '%s', msg: '%s' }",
                     payload.sender_server_port,
                     payload.sender_thread_id,
-                    DateTime(payload.request_time).c_str(),
                     DateTime(payload.client_payload.time).c_str(),
                     payload.client_payload.msgType,
                     payload.client_payload.topic,
