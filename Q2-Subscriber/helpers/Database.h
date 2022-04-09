@@ -19,7 +19,7 @@ using short_time = std::chrono::_V2::system_clock::time_point;
 class Database
 {
 private:
-    using pcs = pair<std::chrono::_V2::system_clock::time_point, string>;
+    using pcs = pair<short_time, string>;
 
     pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
     unordered_map<string, priority_queue<pcs, vector<pcs>, greater<pcs>>> mp;

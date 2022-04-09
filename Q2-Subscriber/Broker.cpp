@@ -230,9 +230,42 @@ void clientHandler(const SocketInfo& sockinfo, int threadid)
         {
             PresentationLayer::sendData(sockinfo.connfd, prepareLocalResponses(data), errMsg, isConnectionClosed);
         }
-        else if (data[0].msgType == MessageType::GET_ALL_TOPICS || data[0].msgType == MessageType::GET_NEXT_MESSAGE || data[0].msgType == MessageType::GET_BULK_MESSAGES)
+        else if (data[0].msgType == MessageType::GET_ALL_TOPICS)
         {
-            PresentationLayer::sendData(sockinfo.connfd, prepareLocalResponses(data), errMsg, isConnectionClosed);
+            vector<ClientPayload> payload = prepareLocalResponses(data);
+            payload.push_back(data[0]);
+
+            // accummulate result from server
+            accumulateResponses(threadid, payload);
+
+            // remove the last entry
+            serv_response[threadid].pop_back();
+
+            PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
+        }
+        else if (data[0].msgType == MessageType::GET_NEXT_MESSAGE || data[0].msgType == MessageType::GET_BULK_MESSAGES)
+        {
+            // Add topic from other ends to local database to sync
+            {
+                ClientPayload getAllTopics;
+                getAllTopics.msgType = MessageType::GET_ALL_TOPICS;
+                getAllTopics.time = current_time();
+                accumulateResponses(threadid, {getAllTopics});
+
+                for (auto &x: serv_response[threadid])
+                    Database::getInstance().addTopic(x.topic);
+            }
+
+            vector<ClientPayload> payload = prepareLocalResponses(data);
+            payload.push_back(data[0]);
+
+            // accummulate result from server
+            accumulateResponses(threadid, payload);
+
+            // remove the last entry
+            serv_response[threadid].pop_back();
+
+            PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
         }
     }
 }
@@ -260,10 +293,116 @@ void recvHandler(int connfd, int threadId)
             continue;
         }
 
-        // simply forward the data for now
+        // get local response
+        auto local = prepareLocalResponses({ data.back().client_payload });
+
+        // simply forward if no valid reply in current server
+        if (local[0].msgType != MessageType::SUCCESS)
+        {
+            // simply forward the data
+            cerr << "Locking info->send_mutex" << endl;
+            pthread_mutex_lock(&info->send_mutex);
+            PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, data);
+            cerr << "Unlocking info->send_mutex" << endl;
+            pthread_mutex_unlock(&info->send_mutex);
+            continue;
+        }
+
+        auto cli_req = data.back().client_payload;
+        data.pop_back();
+
+        vector<ServerPayload> serv_payload;
+        ServerPayload p;
+        p.sender_server_port = data[0].sender_server_port;
+        p.sender_thread_id = data[0].sender_thread_id;
+
+        // if received data is no success, return local data
+        if (data[0].client_payload.msgType != MessageType::SUCCESS)
+        {
+            for (auto &x: local)
+            {
+                memcpy(&p.client_payload, &x, sizeof(ClientPayload));
+                serv_payload.push_back(p);
+            }
+
+            memcpy(&p.client_payload, &cli_req, sizeof(ClientPayload));
+            serv_payload.push_back(p);
+
+            cerr << "Locking info->send_mutex" << endl;
+            pthread_mutex_lock(&info->send_mutex);
+            PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, serv_payload);
+            cerr << "Unlocking info->send_mutex" << endl;
+            pthread_mutex_unlock(&info->send_mutex);
+            continue;
+        }
+
+        memset(&p.client_payload, 0, sizeof(p.client_payload));
+        p.client_payload.time = current_time();
+        p.client_payload.msgType = MessageType::SUCCESS;
+        strcpy(p.client_payload.topic, data[0].client_payload.topic);  
+        
+        // Here means we need to merge the data
+        if (cli_req.msgType == MessageType::GET_ALL_TOPICS)
+        {
+            // Take union
+            set<string> topics;
+            for (auto &x: local)
+                topics.insert(x.topic);
+
+            for (auto &x: data)
+                topics.insert(x.client_payload.topic);
+
+            cerr << "on receive- Topic count to send: " << topics.size() << endl;
+            ServerPayload send_data;
+        
+            for (auto &topic: topics)
+            {
+                strcpy(p.client_payload.topic, topic.c_str());
+                serv_payload.push_back(p);
+            }
+        }
+        else if (cli_req.msgType == MessageType::GET_NEXT_MESSAGE)
+        {
+            // Take minnimum of two
+            auto _mintime = local[0].time < data[0].client_payload.time ? local[0].time : data[0].client_payload.time;
+
+            if (local[0].time == _mintime)
+                memcpy(&p.client_payload, &local[0], sizeof(ClientPayload));
+            else
+                memcpy(&p.client_payload, &data[0].client_payload, sizeof(ClientPayload));
+
+            serv_payload.push_back(p);
+        }
+        else if (cli_req.msgType == MessageType::GET_BULK_MESSAGES)
+        {
+            using pcs = pair<std::chrono::_V2::system_clock::time_point, string>;
+            priority_queue<pcs, vector<pcs>, greater<pcs>> pq;
+
+            for (auto &x: local)
+                pq.push({ x.time, x.msg });
+            
+            for (auto &x: data)
+                pq.push({ x.client_payload.time, x.client_payload.msg });
+
+            // get top BULK_MSG_SIZE msgs
+            for (int i = 0; !pq.empty() && i < BULK_LIMIT; ++i, pq.pop())
+            {
+                auto &time = pq.top().first;
+                auto &msg = pq.top().second;
+
+                strcpy(p.client_payload.msg, msg.c_str());
+                p.client_payload.time = time;
+                serv_payload.push_back(p);
+            }
+        }
+        else
+            assert(0);
+
+        memcpy(&p.client_payload, &cli_req, sizeof(ClientPayload));
+        serv_payload.push_back(p);
         cerr << "Locking info->send_mutex" << endl;
         pthread_mutex_lock(&info->send_mutex);
-        PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, data);
+        PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, serv_payload);
         cerr << "Unlocking info->send_mutex" << endl;
         pthread_mutex_unlock(&info->send_mutex);
     }
