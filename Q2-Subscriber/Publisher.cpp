@@ -256,6 +256,8 @@ void do_task(int sockfd)
 		string topic;
 		cout << "Enter the topic name: ";
 		std::getline(std::cin >> std::ws, topic);
+		topic = topic.substr(0, maxTopicSize < topic.length() ? maxTopicSize : topic.length());
+
 		// convert to lowercase
 		transform(topic.begin(), topic.end(), topic.begin(), ::tolower);
 		
