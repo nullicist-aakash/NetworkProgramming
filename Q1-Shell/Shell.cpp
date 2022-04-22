@@ -1,9 +1,16 @@
 #include <cassert>
 #include <iostream>
 #include <cstring>
+#include <vector>
 #include <unistd.h>
-#define PATH_MAX 256
+#include <stdio.h>
+#include <sys/types.h>
+#include <pwd.h>
 using namespace std;
+
+#define PAUSE { char c; printf("\nPress any key to continue..."); scanf("%c", &c); system("clear"); }
+#define CLEAR_INPUT { char c; while ((c = getchar()) != '\n' && c != '\r' && c != EOF); }
+#define PATH_MAX 256
 
 namespace ShellOperations
 {
@@ -133,10 +140,115 @@ namespace ShellOperationTester
     }
 }
 
+enum class CommandConjunction
+{
+    MSG_QUEUE,
+    SHARED_MEM,
+    PIPE,
+    INPUT_REDIRECT,
+    OUTPUT_REDIRECT,
+    OUTPUT_FILE
+};
+
+struct Command
+{
+    int fds[3];
+    const char* path;
+    int argc;
+    char** argv;
+};
+
+class Shell
+{
+    Shell() {}
+public:
+    Shell(Shell const&)        = delete;
+    void operator=(Shell const&)  = delete;
+    static Shell& getInstance()
+    { 
+        static Shell instance;
+        return instance;
+    }
+
+    void executeCommand(char* cmd)
+    {
+        cout << cmd << endl;
+    }
+};
+
+void printPrompt()
+{
+	char path[PATH_MAX];
+
+	if (getcwd(path, PATH_MAX) == NULL)
+	{
+		perror("getcwd() error");
+		exit(-1);
+	}
+
+
+	struct passwd *pw = getpwuid(geteuid());
+	if (pw == NULL)
+	{
+		printf("getpwuid() error\n");
+		exit(-1);
+	}
+
+	char user[256];
+	strcpy(user, pw->pw_name);
+
+	char hostname[256];
+	if (gethostname(hostname, 256) == -1)
+	{
+		perror("gethostname() error");
+		exit(-1);
+	}
+
+	// green color
+	printf("\033[0;32m");
+
+	// blue color
+	printf("--(\033[0;34m");
+	printf("%s@ %s", user, hostname);
+	
+	// green color
+	printf("\033[0;32m");
+	printf(")-[");
+
+	// white color
+	printf("\033[0;37m");
+	printf("%s", path);
+
+	// green color
+	printf("\033[0;32m");
+	printf("]\n--$");
+
+	// white color
+	printf("\033[0;37m");
+	printf(": ");
+	
+	// reset color
+	printf("\033[0m");
+}
+
 int main()
 {
-    ShellOperationTester::testGetPath();
-	cout << "Done" << endl;
-    
+    string input;
+    while (true)
+    {
+        printPrompt();
+        std::getline(std::cin, input);
+
+        if (input == "exit")
+            break;
+
+        char* cmd = new char[input.length() + 1];
+        strcpy(cmd, input.c_str());
+        Shell::getInstance().executeCommand(cmd);
+        delete[] cmd;
+    }
+
+    PAUSE;
+
     return 0;
 }
