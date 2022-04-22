@@ -1,5 +1,5 @@
 compile:
-	gcc -o shell.o -g Shell.c -fsanitize=address
+	g++ -o shell.o -g Shell.cpp -fsanitize=address
 
 clean:
 	rm shell.o
