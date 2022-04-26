@@ -171,7 +171,7 @@ char* getExecPath(char* in)
 	return NULL;
 }
 
-void execute_normal_command(char* path, char** argv);
+void execute_normal_command(char* path, char** argv)
 {
 	pid_t child_pid;
 	
