@@ -69,6 +69,45 @@ namespace ShellOperations
         return result;
     }
 
+    char** getCommandArguments(char* command, int &size)
+    {
+        char* c = command;
+        char* end = nullptr;
+        char delim = ' ';
+        size = 0;
+
+        if (!*c)
+            return nullptr;
+
+        size++;
+
+        for (char* c = command + 1; *c; end = ++c)
+            if (*c == delim && *(c - 1) != delim)
+                size++;
+        
+        end++;
+
+        int argv_index = 0;
+
+        char** result = new  char*[size+1];
+        while (c != end)
+        {
+            while (c != end && *c == delim && *c)
+                ++c;
+            result[argv_index++] = c;
+            while (c != end && *c != delim && *c)
+                c++;
+
+            *c++ = '\0';
+        }
+        if (!*result[argv_index - 1])
+            size--;
+        result[size] = nullptr;
+        size++;
+        return result;
+
+    }
+
      char* getExecutablePath( char* execName)
     {
         if (!execName)
@@ -88,7 +127,7 @@ namespace ShellOperations
         strcpy(env_path, tmp);
 
         int count = 0;
-         char** locs = splitString(env_path, count, ':');
+        char** locs = splitString(env_path, count, ':');
 
         char* complete_path = new char[PATH_MAX + 1];
         
@@ -176,10 +215,11 @@ struct Command
 void printCommand(Command c)
 {
     cout << "Command : \n" << c.path << endl;
-    for (int i = 0; i < c.argc; ++i)
-        cout << c.argv[i] << " ";
+    for (int i = 0; i < c.argc-1; ++i)
+        cout << c.argv[i] << ".";
     cout << endl;
 }
+
 
 void removeSpace(char* s)
 {
@@ -226,37 +266,20 @@ public:
 
         //Creating a pipe
         int pfds[2];
-        pipe(pfds);
-
+        
         for (int i  = 0; i<num_commands; i++)
         {
             Command c;
             removeSpace(cmds[i]);
-            int cmdsize = 0;
-            while(cmds[i][cmdsize++]!='\0');
-            cmdsize--;
-            cout << cmdsize << endl;
-            char* cur_command = (char*)calloc(cmdsize+1,sizeof(char));
-            for(int j=0;j<cmdsize;j++)
-                cur_command[j]=cmds[i][j];
-            cur_command[cmdsize]='\0';
-            cout << "cmdsize = " << cmdsize << endl;
-            c.argv = ShellOperations::splitString(cur_command, c.argc, ' ');
+            c.argv = ShellOperations::getCommandArguments(cmds[i], c.argc);
             c.path = ShellOperations::getExecutablePath(c.argv[0]);
             commands.push_back(c);
+            
         }
-        commands[0].fds[0] = STDIN_FILENO;
-        commands[0].fds[1] = pfds[1];
-        for(int i = 1; i<num_commands; ++i)
-        {
-            commands[i].fds[0] = pfds[0];
-            commands[i].fds[1] = pfds[1];
-        }
+        delete[] cmds;
 
-        for(auto c:commands)
-            printCommand(c);
-
-        // return;
+        // for(auto c:commands)
+        //     printCommand(c);
 
         //Create message queue
         // SignalQueueID = msgget(key, IPC_CREAT|IPC_EXCL|0600);
@@ -271,41 +294,27 @@ public:
         for(int i=0;i<commands.size();i++) 
         {
             int status;
+            pipe(pfds);
             pid = fork();
             int numRead;
             char * prev_output_buf[BUF_SIZE];
             if(pid == 0)
             {
                 //Child
-                // if(i==0)
-                // {
-                //     //First command
-                //     if(commands.size()>1)
-                //     {
-                //         //redirect output to the pipe
-                //         dup2(commands[i].fds[1],STDOUT_FILENO);
-                //         close(commands[i].fds[1]);
-
-                //         cout << "hmm2\n" << endl;
-                //     }
-                // }
-                // else
-                // {
-                //     //Not first command
-                //     //Connect to previous command
-                //     cout << "Connecting to previous command" << endl;
-                //     dup2(commands[i].fds[0],0);
-                //     dup2(commands[i].fds[1],1);
-                //     close(commands[i].fds[0]);
-                //     close(commands[i].fds[1]);
-                // }
-                // //Execute command
-                if(commands.size()>1 && i!=commands.size()-1 && i>0)
+                if(commands.size()>1 && i!=commands.size()-1 && commands[i].fds[1]!=1)
                 {
-                    dup2(commands[i].fds[1],1);
+                    commands[i].fds[1] = pfds[1];
+                    cout << commands[i].fds[1] << endl;
+                    dup2(commands[i].fds[1], STDOUT_FILENO);
+                    close(commands[i].fds[1]);
+                }
+                if(i>0 &&commands[i].fds[0]!=0)
+                {
+                    dup2(commands[i].fds[0], STDIN_FILENO);
+                    close(commands[i].fds[0]);
                 }
                 
-                cout << "Execing " << commands[i].argv[0] << endl;
+                //cout << "Execing " <<  i << " " << commands[i].argv[0] << endl;
                 if(execvp(commands[i].path, commands[i].argv)<0)
                 {
                     perror("execvp");
@@ -315,9 +324,12 @@ public:
             }
             else
             {
-                close(commands[i].fds[1]);
-                dup2(commands[i].fds[0],0);
+                close(pfds[1]);
                 wait(&status);
+                if(i!=commands.size()-1) 
+                    commands[i+1].fds[0] = pfds[0];
+                delete[] commands[i].path;
+                delete[] commands[i].argv;
             }
         }
     }
@@ -380,12 +392,13 @@ void printPrompt()
 
 int main()
 {
+    printPrompt();
     while (true)
     {
         string input;
-        printPrompt();
-        while(!input.length())
-            std::getline(std::cin, input);
+        std::getline(std::cin, input);
+        if(!input.length())
+            continue;
 
         if (input == "exit")
             break;
@@ -394,8 +407,16 @@ int main()
         cmd[input.length()] = '\0';
         cout << input.length() << endl; 
         strcpy(cmd, input.c_str());
+
         Shell::getInstance().executeCommands(cmd);
+        
+        for(int i=0;i<input.length();i++)
+            cout << cmd[i];
+        cout << "." << endl;
+        
         delete[] cmd;
+        
+        printPrompt();
     }
 
     PAUSE;
