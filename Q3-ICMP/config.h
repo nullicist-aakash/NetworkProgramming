@@ -2,6 +2,7 @@
 #include <iostream>
 #include <iomanip>
 #include <cassert>
+#include <cstring>
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -16,7 +17,6 @@
 
 #include <netdb.h>
 #include <unistd.h>
-#include <cstring>
 #include <signal.h>
 #include <errno.h>
 
@@ -127,12 +127,13 @@ public:
     const char* getHostIP()
     {
         auto sa = (sockaddr_in*)info->ai_addr;
-        if (!hostIP[0] && info && inet_ntop(AF_INET, &sa->sin_addr, hostIP, 128) == NULL)
+        auto x =  &sa->sin_addr;
+        if (!hostIP[0] && info && inet_ntop(AF_INET, x, hostIP, 128) == NULL)
         {
             hostIP[0] = 0;
             return nullptr;
         }
-        
+
         return hostIP;
     }
 

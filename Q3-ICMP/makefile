@@ -1,5 +1,5 @@
 compile:
-	@g++ -g pathfinder.cpp -fsanitize=address
+	@g++ -g pathfinder.cpp -pthread -fsanitize=address
 
 clean:
 	rm a.out

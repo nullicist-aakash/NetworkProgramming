@@ -1,4 +1,12 @@
 #include "config.h"
+#include <vector>
+#include <fstream>
+
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 int gotalarm = 0;
 void sig_alrm(int signo)
@@ -84,16 +92,130 @@ void setSignalHandler()
     sigaction(SIGALRM, &new_action, NULL);
 }
 
-int main()
+class DNSResolver
 {
+    static vector<sockaddr_in> ret;
+
+    enum class IPConvertStatus
+    {
+        SUCCESS,
+        INVALID_ADDR
+    };
+
+    static IPConvertStatus convertIPtoN(const char* address, int &ret)
+    {
+        ret = 0;
+        int st = inet_pton(AF_INET, address, &ret);
+
+        if (st == 1)
+            return IPConvertStatus::SUCCESS;
+        
+        return IPConvertStatus::INVALID_ADDR;
+    }
+
+public:
+    static int getAddr(const char* address, sockaddr_in& addr, bool dnsSend = false)
+    {
+        bzero(&addr, sizeof(addr));
+
+        int converted;
+        auto status = convertIPtoN(address, converted);
+
+        if (status == IPConvertStatus::SUCCESS)
+        {
+            addr.sin_port = 0;
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = converted;
+            return 0;
+        }
+
+        if (!dnsSend)
+            return -1;
+
+        addrinfo temp;
+        addrinfo* info = nullptr;
+        bzero(&temp, sizeof(temp));
+        temp.ai_flags = AI_CANONNAME;
+        if (getaddrinfo(address, 0, &temp, &info) != 0)
+        {
+            assert(info == nullptr);
+            return -1;
+        }
+
+        addr = *(sockaddr_in*)info->ai_addr;
+        freeaddrinfo(info);
+        return 0;
+    }
+};
+
+vector<sockaddr_in> getIPAddresses(int ip_count)
+{
+    vector<sockaddr_in> temp;
+
+    while (ip_count--)
+    {
+        sockaddr_in tmp;
+        DNSResolver::getAddr(RandomIPGenerator::getRandomIPstr().c_str(), tmp, false);
+        temp.push_back(tmp);
+    }
+
+    return temp;
+}
+
+vector<sockaddr_in> getFileIPAddresses(ifstream &stream)
+{
+    vector<sockaddr_in> ret;
+    while (stream)
+    {
+        string s;
+        stream >> s;
+        
+        if (s.size() == 0)
+            continue;
+
+        sockaddr_in sa;
+        if (DNSResolver::getAddr(s.c_str(), sa, true) == -1)
+            cerr << "Could not resolve IP for website: " << s <<  endl;
+        else
+            ret.push_back(sa);
+    }
+
+    return ret;
+}
+
+int main(int argc, char** argv)
+{
+    if (argc != 2)
+    {
+        cerr << "Usage: ./a.out <num_ip_to_generate>" << endl;
+        return -1;
+    }
+
+    // Get all IP addresses    
+    auto sockaddrs = getIPAddresses(atoi(argv[1]));
+    ifstream inf {"urls.txt"};
+
+    if (!inf)
+    {
+        cerr << "Could not open file urls.txt for reading!!" << endl;
+    }
+
+    for (auto &x: getFileIPAddresses(inf))
+        sockaddrs.push_back(x);
+
+    for (auto &x: sockaddrs)
+    {
+        char c[16];
+        cout << inet_ntop(AF_INET, &x.sin_addr, c, 16) << endl;
+    }
+
     setSignalHandler();
 
-    Address a("www.google.com");
-    sockaddr *SA_Send = a.getHostAddrInfo()->ai_addr;
+    sockaddr_in *SA_Send = &sockaddrs[0];
+    char h[16];
+    inet_ntop(AF_INET, &SA_Send->sin_addr, h, 16);
 
-    auto ai = a.getHostAddrInfo();
-    auto h = a.getHostIP();
-    cout << "Traceroute to " << (ai->ai_canonname ? ai->ai_canonname : h) << " (" << h << "): " << max_ttl << " hops max, " << ICMPSize << " data bytes" << endl;
+    cout << "Traceroute to " << h << "): " << max_ttl << " hops max, " << ICMPSize << " data bytes" << endl;
 
     int recvfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
     if (recvfd < 0)
@@ -133,7 +255,7 @@ int main()
 
         sockaddr SA_last;
 
-        bzero(&SA_last, sizeof(ai->ai_addrlen));
+        bzero(&SA_last, sizeof(sockaddr));
 
         cout << ttl << "\t";
         for (int probe = 0; probe < 3; ++probe)
@@ -144,7 +266,7 @@ int main()
             gettimeofday(&info.rec_tv, nullptr);
 
             ((sockaddr_in*)SA_Send)->sin_port = htons(32768 + 666 + seq);
-            int n = sendto(sendfd, &info, ICMPSize, 0, SA_Send, ai->ai_addrlen);
+            int n = sendto(sendfd, &info, ICMPSize, 0, (sockaddr*)SA_Send, 16);
 
             if (n < 0)
             {
@@ -163,10 +285,10 @@ int main()
                 continue;
             }
             
-            if (sock_cmp_addr(&SA_Recv, &SA_last, ai->ai_addrlen) != 0)
+            if (sock_cmp_addr(&SA_Recv, &SA_last, 16) != 0)
             {
                 cout << "\t" << sock_ntop_host(&SA_Recv);
-                memcpy(&SA_last, &SA_Recv, ai->ai_addrlen);
+                memcpy(&SA_last, &SA_Recv, 16);
             }
 
             tv_sub(&tvrecv, &info.rec_tv);
