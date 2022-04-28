@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <pwd.h>
 #include <sys/msg.h>
+#include "Lexer.h"
 
 
 using namespace std;
@@ -23,6 +24,12 @@ int SignalQueueID;
 struct SignalMsg{
     long mtype;
     int signo;
+};
+
+int PipeQueueID;
+struct PipeMsg{
+    long mtype;
+    char buf[BUF_SIZE];
 };
 
 
@@ -392,29 +399,28 @@ void printPrompt()
 
 int main()
 {
+    loadDFA();
     printPrompt();
+
     while (true)
     {
         string input;
         std::getline(std::cin, input);
+
         if(!input.length())
             continue;
 
         if (input == "exit")
             break;
 
-        char* cmd = new char[input.length() + 1];
-        cmd[input.length()] = '\0';
-        cout << input.length() << endl; 
-        strcpy(cmd, input.c_str());
+        Buffer b(input);
+        Token* t = getNextToken(b);
 
-        Shell::getInstance().executeCommands(cmd);
-        
-        for(int i=0;i<input.length();i++)
-            cout << cmd[i];
-        cout << "." << endl;
-        
-        delete[] cmd;
+        while(t)
+        {
+            cout << *t << endl;
+            t = getNextToken(b);
+        }
         
         printPrompt();
     }

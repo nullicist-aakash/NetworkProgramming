@@ -1,0 +1,39 @@
+13 10 9 7 4
+TK_TOKEN
+TK_DAEMON
+TK_PIPE
+TK_HASH
+TK_SS
+TK_COMMA
+TK_AND
+TK_FG
+TK_BG
+TK_WHITESPACE
+TK_ERROR_SYMBOL
+TK_ERROR_PATTERN
+TK_ERROR_LENGTH
+0 1 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123457890[]\{}!@$%^*():-=_+";'./<>?
+1 1 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123457890[]\{}!@$%^*():-=_+";'./<>?
+0 2 |
+0 3 #
+3 4 #
+0 5 S
+5 6 S
+0 7 ,
+0 8 &
+1 TK_TOKEN
+2 TK_PIPE
+4 TK_HASH
+6 TK_SS
+7 TK_COMMA
+8 TK_AND
+9 TK_WHITESPACE
+daemon TK_DAEMON
+SS TK_SS
+fg TK_FG
+bg TK_BG
+num_tokens num_states num_transitions num_finalstates num_keywords
+'num_tokens' lines, each having one string representing the token
+'num_transitions' lines, each having 3 entries: start state, end state and char stream
+'num_finalstates' lines, each having 2 entries: state number and state TOKEN
+'num_keywords' lines, each having 2 entries: keyword and corresponding TOKEN
