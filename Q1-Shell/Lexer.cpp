@@ -165,10 +165,17 @@ Token* getNextToken(Buffer& buffer)
 			BUFF[i] = buffer.getChar(buffer.start_index - token->length + i);
 		token->lexeme = BUFF;
 
-
+		if (token->type == TokenType::TK_TOKEN)
+		{
+			auto res = dfa.lookupTable.find(token->lexeme);
+			if (res != dfa.lookupTable.end())
+				token->type = dfa.lookupTable.at(token->lexeme);
+		}
 
 		return token;
 	}
 
-	return nullptr;
+	Token* end = new Token;
+	end->type = TokenType::TK_END;
+	return end;
 }

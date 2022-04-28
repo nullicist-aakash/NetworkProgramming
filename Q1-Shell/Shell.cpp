@@ -9,6 +9,7 @@
 #include <pwd.h>
 #include <sys/msg.h>
 #include "Lexer.h"
+#include "Parser.h"
 
 
 using namespace std;
@@ -397,9 +398,12 @@ void printPrompt()
 	printf("\033[0m");
 }
 
+
 int main()
 {
+    freopen("shell.log","w",stderr);
     loadDFA();
+    loadParser();
     printPrompt();
 
     while (true)
@@ -414,13 +418,10 @@ int main()
             break;
 
         Buffer b(input);
-        Token* t = getNextToken(b);
-
-        while(t)
-        {
-            cout << *t << endl;
-            t = getNextToken(b);
-        }
+        bool isParseErr;
+        auto x = parseInputSourceCode(b, isParseErr);
+        if(isParseErr)
+            cout << "Input command is syntactically incorrect" << endl;
         
         printPrompt();
     }

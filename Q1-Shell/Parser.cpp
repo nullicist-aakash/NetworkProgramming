@@ -202,6 +202,13 @@ void Parser::computeParseTable()
 			if (!select.test(j))
 				continue;
 
+			cerr << "Symbol " << parser.symbolType2symbolStr[productions[i][0]] << " on " << parser.symbolType2symbolStr[j] << " will give ";
+			
+			cerr << parser.symbolType2symbolStr[productions[i][0]] << " ---> ";
+			for (int j = 1; j < productions[i].size(); ++j)
+				cerr << parser.symbolType2symbolStr[productions[i][j]] << " ";
+			cerr << endl;
+			
 			parseTable[productions[i][0]][j] = i;
 		}
 	}
@@ -229,6 +236,15 @@ void Parser::computeParseTable()
 			if (row[col] == -1)
 				row[col] = -2;
 	}
+
+	cerr << productions.size() << endl;
+	for (auto &prod: productions)
+	{
+		cerr << parser.symbolType2symbolStr[prod[0]] << " -> ";
+		for (int j = 1; j < prod.size(); ++j)
+			cerr << parser.symbolType2symbolStr[prod[j]] << " ";
+		cerr << "." << endl;
+	}
 }
 
 Parser parser;
@@ -242,16 +258,12 @@ std::ostream& operator<< (std::ostream& out, const ParseTreeNode& node)
 	}
 
 	const string &A = node.isLeaf ? node.token->lexeme : "----";
-	int B = node.isLeaf ? node.token->line_number : -1;
-	const string& C = !(node.isLeaf) ? "----" : parser.symbolType2symbolStr[node.symbol_index];
-	double D = node.token == nullptr || !(node.token->type == TokenType::TK_RNUM || node.token->type == TokenType::TK_NUM) ?
-		std::numeric_limits<double>::quiet_NaN() :
-		stod(node.token->lexeme);
+	
 	const string &E = node.parent == NULL ? "root" : parser.symbolType2symbolStr[node.parent->symbol_index];
-	const string& F = node.isLeaf ? "yes" : "no";
+	
 	const string& G = node.isLeaf ? "----" : parser.symbolType2symbolStr[node.symbol_index];
 
-	out << setw(30) << A << setw(15) << B << setw(30) << C << setw(15) << D << setw(30) << E << setw(10) << F << setw(30) << G;
+	out << setw(30) << A << setw(30) << E << setw(30) << G;
 
 	return out;
 }
@@ -281,6 +293,9 @@ void loadParser()
 	{
 		string BUFF;
 		std::getline(grammarReader >> std::ws, BUFF);
+
+		while (BUFF.back() == ' ' || BUFF.back() == '\r' || BUFF.back() == '\n')
+			BUFF.pop_back();
 
 		for (size_t pos = 0; (pos = BUFF.find(" ")) != std::string::npos; BUFF.erase(0, pos + 1))
 			parser.productions[i].push_back(
@@ -344,12 +359,11 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 	ParseTreeNode* node = parseTree;
 	Token* lookahead = getNextToken(buffer);
 
-	while (lookahead != nullptr)
+	while (st.top() != -1)
 	{
 		if (lookahead->type == TokenType::TK_ERROR_LENGTH)
 		{
 			isError = true;
-			cout << *lookahead << endl;
 			cerr << *lookahead << endl;
 
 			lookahead = getNextToken(buffer);
@@ -358,7 +372,6 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 		if (lookahead->type == TokenType::TK_ERROR_PATTERN)
 		{
 			isError = true;
-			cout << *lookahead << endl;
 			cerr << *lookahead << endl;
 
 			lookahead = getNextToken(buffer);
@@ -367,7 +380,6 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 		if (lookahead->type == TokenType::TK_ERROR_SYMBOL)
 		{
 			isError = true;
-			cout << *lookahead << endl;
 			cerr << *lookahead << endl;
 
 			lookahead = getNextToken(buffer);
@@ -376,6 +388,15 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 
 		int stack_top = st.top();
 		int input_terminal = parser.symbolStr2symbolType[dfa.tokenType2tokenStr[(int)lookahead->type]];
+
+		if (lookahead->type == TokenType::TK_FG || lookahead->type == TokenType::TK_BG || lookahead->type == TokenType::TK_SS)
+		{
+			if (stack_top != input_terminal && stack_top != parser.start_index)
+			{
+				lookahead->type = TokenType::TK_TOKEN;
+				input_terminal = parser.symbolStr2symbolType[dfa.tokenType2tokenStr[(int)lookahead->type]];
+			}
+		}
 
 		if (stack_top == -1)
 			break;
@@ -395,7 +416,6 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 			continue;
 		}
 
-		int line_number = lookahead->line_number;
 		const string &la_token = parser.symbolType2symbolStr[input_terminal];
 		const string &lexeme = lookahead->lexeme;
 		const string &expected_token = parser.symbolType2symbolStr[stack_top];
@@ -404,8 +424,8 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 		if (stack_top < parser.num_terminals)
 		{
 			isError = true;
-			cout << "Line " << line_number << "\t\terror: The token " << la_token << " for lexeme " << lexeme << " does not match with the expected token " << expected_token << endl;
-			cerr << "Line " << line_number << "\t\terror: The token " << la_token << " for lexeme " << lexeme << " does not match with the expected token " << expected_token << endl;
+			cerr << "\t\terror: The token " << la_token << " for lexeme " << lexeme << " does not match with the expected token " << expected_token << endl;
+			cerr << "\t\terror: The token " << la_token << " for lexeme " << lexeme << " does not match with the expected token " << expected_token << endl;
 			_pop(&node, st);
 			continue;
 		}
@@ -456,6 +476,8 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 		// if the production is not found and neither it is in sync set
 		if (production_number == -1)
 		{
+			isError = true;
+			cerr << "\t\terror: Invalid token " << la_token << " encountered with value " << lexeme << " stack top " << expected_token << endl;
 			lookahead = getNextToken(buffer);
 			continue;
 		}
@@ -464,23 +486,17 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 		assert(production_number == -2);
 
 		isError = true;
-		cout << "Line " << line_number << "\t\terror: Invalid token " << la_token << " encountered with value " << lexeme << " stack top " << expected_token << endl;
-		cerr << "Line " << line_number << "\t\terror: Invalid token " << la_token << " encountered with value " << lexeme << " stack top " << expected_token << endl;
+		cerr << "\t\terror: Invalid token " << la_token << " encountered with value " << lexeme << " stack top " << expected_token << endl;
 		_pop(&node, st);
 	}
 
-	assert(st.top() == -1);
+	if (st.top() != -1 || lookahead->type != TokenType::TK_END)
+		isError = true;
 
 	if (!isError)
-	{
-		cout << "Input source code is syntactically correct." << endl;
 		cerr << "Input source code is syntactically correct." << endl;
-	}
 	else
-	{
-		cout << "Input source code is syntactically incorrect" << endl;
 		cerr << "Input source code is syntactically incorrect" << endl;
-	}
 
 	cerr << endl;
 
