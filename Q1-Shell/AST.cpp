@@ -11,8 +11,6 @@ std::ostream& operator<<(std::ostream& out, const ASTNode& node)
 		parser.symbolType2symbolStr[node.sym_index] <<
 		"', lexeme: '" <<
 		(node.token ? node.token->lexeme : "") <<
-		"', isGlobal: " <<
-		(node.isGlobal ? "yes" : "no") <<
 		", type: ";
 
 	if (node.derived_type)
@@ -32,8 +30,6 @@ Token* copy_token(Token* input)
 	Token* out = new Token;
 	out->type = input->type;
 	out->lexeme = input->lexeme;
-	out->line_number = input->line_number;
-	out->start_index = input->line_number;
 	out->length = input->length;
 	return out;
 }
@@ -49,14 +45,70 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 		ASTNode* node = new ASTNode;
 		node->sym_index = input->symbol_index;
 		node->token = copy_token(input->token);
-		node->isLeaf = 1;
 		return node;
 	}
 
 	ASTNode* node = new ASTNode;
-	node->isLeaf = 0;
 	node->sym_index = input->symbol_index;
 
+	if(input->productionNumber == 0)
+	{
+		//input -> daemon command redirect isBackground TK_END
+		ASTNode* dem = createAST(input->children[0], input);
+		ASTNode* bg = createAST(input->children[3],input);
+		node->isDaemon = dem == nullptr ? false : true; 
+		node->isBackground = bg == nullptr ? false : true;
+		node->children.resize(1);
+		node->children[0] = createAST(input->children[1], input);
+		//TODO:: handle redirect
+
+	}
+	else if (input->productionNumber <= 3)
+	{
+		//input TK_FG
+		node->children.resize(1);
+		node->children[0] = createAST(input->children[0], input);
+	}
+	else if(input->productionNumber == 4)
+	{
+		// daemon TK_DAEMON
+		node->isDaemon = 1;
+	}
+	else if(input->productionNumber == 5)
+	{
+		// daemon eps
+		delete node;
+		return nullptr;
+	}
+	else if(input->productionNumber == 6)
+	{
+		// redirect eps
+		delete node;
+		return nullptr;
+	}
+	else if(input->productionNumber == 7)
+	{
+		// isBackground TK_AND
+		node->isBackground = 1;
+	}
+	else if(input->productionNumber == 8)
+	{
+		// isBackground eps
+		delete node;
+		return nullptr;
+	}
+	else if(input->productionNumber == 9)
+	{
+		// command cmd remainCmd
+		if (input->children[1])
+			node->token = copy_token(input->children[1]->children[0]->token);
+		else
+		{
+			node->token = new Token;
+			node->token->type = TokenType::TK_TOKEN;
+		}
+		
+	}
 	if (input->productionNumber == 0)
 	{
 		//<program> ===> <otherFunctions> <mainFunction>
@@ -791,7 +843,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if (input->productionNumber == 78)
 	{
 		//<logicalOp> ===> TK_AND
-		//<logicalOp>.data=”&&&”;
+		//<logicalOp>.data=ï¿½&&&ï¿½;
 
 		delete node;
 		return createAST(input->children[0], input);
@@ -799,7 +851,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if (input->productionNumber == 79)
 	{
 		//<logicalOp> ===> TK_OR
-		//<logicalOp>.data=”@@@”;
+		//<logicalOp>.data=ï¿½@@@ï¿½;
 
 		delete node;
 		return createAST(input->children[0], input);
@@ -807,7 +859,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if (input->productionNumber == 80)
 	{
 		//<relationalOp> ===> TK_LT
-		//<relationalOp>.data=”<”;
+		//<relationalOp>.data=ï¿½<ï¿½;
 
 		delete node;
 		return createAST(input->children[0], input);
@@ -815,7 +867,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if (input->productionNumber == 81)
 	{
 		//<relationalOp> ===> TK_LE
-		//<relationalOp>.data=”<=”;
+		//<relationalOp>.data=ï¿½<=ï¿½;
 
 		delete node;
 		return createAST(input->children[0], input);
@@ -823,7 +875,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if (input->productionNumber == 82)
 	{
 		//<relationalOp> ===> TK_EQ
-		//<relationalOp>.data=”==”;
+		//<relationalOp>.data=ï¿½==ï¿½;
 
 		delete node;
 		return createAST(input->children[0], input);
@@ -831,7 +883,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if (input->productionNumber == 83)
 	{
 		//<relationalOp> ===> TK_GT
-		//<relationalOp>.data=”>”;
+		//<relationalOp>.data=ï¿½>ï¿½;
 
 		delete node;
 		return createAST(input->children[0], input);
@@ -839,7 +891,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if (input->productionNumber == 84)
 	{
 		//<relationalOp> ===> TK_GE
-		//<relationalOp>.data=”>=”;
+		//<relationalOp>.data=ï¿½>=ï¿½;
 
 		delete node;
 		return createAST(input->children[0], input);
@@ -847,7 +899,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if (input->productionNumber == 85)
 	{
 		//<relationalOp> ===> TK_NE
-		//<relationalOp>.data=”!=”;
+		//<relationalOp>.data=ï¿½!=ï¿½;
 
 		delete node;
 		return createAST(input->children[0], input);

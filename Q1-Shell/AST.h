@@ -7,8 +7,9 @@ std::ostream& operator<<(std::ostream&, const TypeLog&);
 
 struct ASTNode
 {
-	int isLeaf = 0;
-	int isGlobal = 0;
+	bool isBackground;
+	bool isDaemon;
+	int fds[3];
 	int sym_index = 0;
 
 	TypeLog* derived_type = nullptr;
