@@ -414,9 +414,6 @@ int main()
         if(!input.length())
             continue;
 
-        if (input == "exit")
-            break;
-
         Buffer b(input);
         bool isParseErr;
         auto x = parseInputSourceCode(b, isParseErr);

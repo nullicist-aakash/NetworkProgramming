@@ -1,4 +1,4 @@
-11 16 29 11
+12 16 30 12
 eps
 TK_TOKEN
 TK_DAEMON
@@ -9,6 +9,7 @@ TK_COMMA
 TK_AND
 TK_FG
 TK_BG
+TK_EXIT
 TK_END
 input
 daemon
@@ -26,6 +27,7 @@ hashRemain
 ssRemain
 commaCmd
 commaRemainder
+input TK_EXIT
 input daemon command redirect isBackground TK_END
 input TK_FG
 input TK_BG

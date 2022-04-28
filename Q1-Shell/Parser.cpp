@@ -389,7 +389,7 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 		int stack_top = st.top();
 		int input_terminal = parser.symbolStr2symbolType[dfa.tokenType2tokenStr[(int)lookahead->type]];
 
-		if (lookahead->type == TokenType::TK_FG || lookahead->type == TokenType::TK_BG || lookahead->type == TokenType::TK_SS)
+		if (lookahead->type == TokenType::TK_FG || lookahead->type == TokenType::TK_BG || lookahead->type == TokenType::TK_SS || lookahead->type == TokenType::TK_EXIT)
 		{
 			if (stack_top != input_terminal && stack_top != parser.start_index)
 			{

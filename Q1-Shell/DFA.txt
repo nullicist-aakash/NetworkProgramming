@@ -1,4 +1,4 @@
-14 10 7 6 4
+15 10 7 6 5
 TK_TOKEN
 TK_DAEMON
 TK_PIPE
@@ -12,6 +12,7 @@ TK_WHITESPACE
 TK_ERROR_SYMBOL
 TK_ERROR_PATTERN
 TK_ERROR_LENGTH
+TK_EXIT
 TK_END
 0 1 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123457890[]\{}!@$%^*():-=_+";'./<>?
 1 1 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123457890[]\{}!@$%^*():-=_+";'./<>?
@@ -30,6 +31,7 @@ daemon TK_DAEMON
 SS TK_SS
 fg TK_FG
 bg TK_BG
+exit TK_EXIT
 num_tokens num_states num_transitions num_finalstates num_keywords
 'num_tokens' lines, each having one string representing the token
 'num_transitions' lines, each having 3 entries: start state, end state and char stream
