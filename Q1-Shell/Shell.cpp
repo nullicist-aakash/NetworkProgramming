@@ -5,16 +5,31 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <pwd.h>
+#include <sys/msg.h>
+
+
 using namespace std;
 
 #define PAUSE { char c; printf("\nPress any key to continue..."); scanf("%c", &c); system("clear"); }
 #define CLEAR_INPUT { char c; while ((c = getchar()) != '\n' && c != '\r' && c != EOF); }
 #define PATH_MAX 256
+#define MSGQ_PATH "./Shell.cpp"
+#define BUF_SIZE 1024
+
+
+int SignalQueueID;
+struct SignalMsg{
+    long mtype;
+    int signo;
+};
+
+
 
 namespace ShellOperations
 {
-    const char** splitString(char* input, int &size, char delim = ' ')
+    char** splitString(char* input, int &size, char delim = ' ')
     {
         char* c = input;
         char* end = nullptr;
@@ -33,7 +48,7 @@ namespace ShellOperations
 
         int argv_index = 0;
 
-        const char** result = new const char*[size];
+        char** result = new  char*[size];
 
         while (c != end)
         {
@@ -54,7 +69,46 @@ namespace ShellOperations
         return result;
     }
 
-    const char* getExecutablePath(const char* execName)
+    char** getCommandArguments(char* command, int &size)
+    {
+        char* c = command;
+        char* end = nullptr;
+        char delim = ' ';
+        size = 0;
+
+        if (!*c)
+            return nullptr;
+
+        size++;
+
+        for (char* c = command + 1; *c; end = ++c)
+            if (*c == delim && *(c - 1) != delim)
+                size++;
+        
+        end++;
+
+        int argv_index = 0;
+
+        char** result = new  char*[size+1];
+        while (c != end)
+        {
+            while (c != end && *c == delim && *c)
+                ++c;
+            result[argv_index++] = c;
+            while (c != end && *c != delim && *c)
+                c++;
+
+            *c++ = '\0';
+        }
+        if (!*result[argv_index - 1])
+            size--;
+        result[size] = nullptr;
+        size++;
+        return result;
+
+    }
+
+     char* getExecutablePath( char* execName)
     {
         if (!execName)
             return nullptr;
@@ -68,12 +122,12 @@ namespace ShellOperations
         }
 
         // Case 2: When we need to search for location in PATH env variable
-        const char* tmp = getenv("PATH");
+         char* tmp = getenv("PATH");
         char* env_path = new char[strlen(tmp) + 1];
         strcpy(env_path, tmp);
 
         int count = 0;
-        const char** locs = splitString(env_path, count, ':');
+        char** locs = splitString(env_path, count, ':');
 
         char* complete_path = new char[PATH_MAX + 1];
         
@@ -153,26 +207,131 @@ enum class CommandConjunction
 struct Command
 {
     int fds[3];
-    const char* path;
+     char* path;
     int argc;
     char** argv;
 };
+
+void printCommand(Command c)
+{
+    cout << "Command : \n" << c.path << endl;
+    for (int i = 0; i < c.argc-1; ++i)
+        cout << c.argv[i] << ".";
+    cout << endl;
+}
+
+
+void removeSpace(char* s)
+{
+    bool begin = true;
+    char* s2 = s;
+    do {
+        if (*s2 != ' ' && begin)
+        {
+            begin = false;
+            *s++ = *s2;
+        }
+        else if(!begin)
+            *s++ = *s2;
+    } while (*s2++ && *s2!='\0');
+    *s = '\0';
+    *s--;
+    while(*s==' ')
+        *s--='\0';
+}
 
 class Shell
 {
     Shell() {}
 public:
-    Shell(Shell const&)        = delete;
-    void operator=(Shell const&)  = delete;
+    Shell(Shell &)        = delete;
+    void operator=(Shell &)  = delete;
     static Shell& getInstance()
     { 
         static Shell instance;
         return instance;
     }
 
-    void executeCommand(char* cmd)
+    void executeCommands(char* cmd)
     {
-        cout << cmd << endl;
+        //Get num of commands 
+        int pid;
+        int ret;
+        struct msqid_ds ctl_buf;
+        key_t key = ftok(MSGQ_PATH, 'a');
+
+        vector<Command> commands;
+        int num_commands = 0;
+        char** cmds = ShellOperations::splitString(cmd, num_commands, '|');
+
+        //Creating a pipe
+        int pfds[2];
+        
+        for (int i  = 0; i<num_commands; i++)
+        {
+            Command c;
+            removeSpace(cmds[i]);
+            c.argv = ShellOperations::getCommandArguments(cmds[i], c.argc);
+            c.path = ShellOperations::getExecutablePath(c.argv[0]);
+            commands.push_back(c);
+            
+        }
+        delete[] cmds;
+
+        // for(auto c:commands)
+        //     printCommand(c);
+
+        //Create message queue
+        // SignalQueueID = msgget(key, IPC_CREAT|IPC_EXCL|0600);
+        // if (SignalQueueID == -1)
+        // {
+        //     perror("msgget:");
+        //     exit(1);
+        // }
+        // ret = msgctl(qid, IPC_STAT, &ctl_buf);
+ 
+
+        for(int i=0;i<commands.size();i++) 
+        {
+            int status;
+            pipe(pfds);
+            pid = fork();
+            int numRead;
+            char * prev_output_buf[BUF_SIZE];
+            if(pid == 0)
+            {
+                //Child
+                if(commands.size()>1 && i!=commands.size()-1 && commands[i].fds[1]!=1)
+                {
+                    commands[i].fds[1] = pfds[1];
+                    cout << commands[i].fds[1] << endl;
+                    dup2(commands[i].fds[1], STDOUT_FILENO);
+                    close(commands[i].fds[1]);
+                }
+                if(i>0 &&commands[i].fds[0]!=0)
+                {
+                    dup2(commands[i].fds[0], STDIN_FILENO);
+                    close(commands[i].fds[0]);
+                }
+                
+                //cout << "Execing " <<  i << " " << commands[i].argv[0] << endl;
+                if(execvp(commands[i].path, commands[i].argv)<0)
+                {
+                    perror("execvp");
+                    exit(1);
+                }
+                break;
+            }
+            else
+            {
+                close(pfds[1]);
+                wait(&status);
+                if(i!=commands.size()-1) 
+                    commands[i+1].fds[0] = pfds[0];
+                delete[] commands[i].path;
+                delete[] commands[i].argv;
+            }
+        }
     }
 };
 
@@ -233,19 +392,31 @@ void printPrompt()
 
 int main()
 {
-    string input;
+    printPrompt();
     while (true)
     {
-        printPrompt();
+        string input;
         std::getline(std::cin, input);
+        if(!input.length())
+            continue;
 
         if (input == "exit")
             break;
 
         char* cmd = new char[input.length() + 1];
+        cmd[input.length()] = '\0';
+        cout << input.length() << endl; 
         strcpy(cmd, input.c_str());
-        Shell::getInstance().executeCommand(cmd);
+
+        Shell::getInstance().executeCommands(cmd);
+        
+        for(int i=0;i<input.length();i++)
+            cout << cmd[i];
+        cout << "." << endl;
+        
         delete[] cmd;
+        
+        printPrompt();
     }
 
     PAUSE;
