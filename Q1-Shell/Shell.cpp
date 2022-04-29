@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <pwd.h>
 #include <sys/msg.h>
+#include <libexplain/setpgid.h>
 #include "Lexer.h"
 #include "Parser.h"
 #include "AST.h"
@@ -20,21 +21,6 @@ using namespace std;
 #define PATH_MAX 256
 #define MSGQ_PATH "./Shell.cpp"
 #define BUF_SIZE 1024
-
-
-int SignalQueueID;
-struct SignalMsg{
-    long mtype;
-    int signo;
-};
-
-int PipeQueueID;
-struct PipeMsg{
-    long mtype;
-    char buf[BUF_SIZE];
-};
-
-
 
 namespace ShellOperations
 {
@@ -78,46 +64,7 @@ namespace ShellOperations
         return result;
     }
 
-    char** getCommandArguments(char* command, int &size)
-    {
-        char* c = command;
-        char* end = nullptr;
-        char delim = ' ';
-        size = 0;
-
-        if (!*c)
-            return nullptr;
-
-        size++;
-
-        for (char* c = command + 1; *c; end = ++c)
-            if (*c == delim && *(c - 1) != delim)
-                size++;
-        
-        end++;
-
-        int argv_index = 0;
-
-        char** result = new  char*[size+1];
-        while (c != end)
-        {
-            while (c != end && *c == delim && *c)
-                ++c;
-            result[argv_index++] = c;
-            while (c != end && *c != delim && *c)
-                c++;
-
-            *c++ = '\0';
-        }
-        if (!*result[argv_index - 1])
-            size--;
-        result[size] = nullptr;
-        size++;
-        return result;
-
-    }
-
-     char* getExecutablePath( char* execName)
+    char* getExecutablePath(const char* execName)
     {
         if (!execName)
             return nullptr;
@@ -131,7 +78,7 @@ namespace ShellOperations
         }
 
         // Case 2: When we need to search for location in PATH env variable
-         char* tmp = getenv("PATH");
+        char* tmp = getenv("PATH");
         char* env_path = new char[strlen(tmp) + 1];
         strcpy(env_path, tmp);
 
@@ -173,174 +120,226 @@ namespace ShellOperations
     }
 }
 
-namespace ShellOperationTester
-{
-    void testSplitString()
-    {
-        char s1[] { "@@abc @@ def ghi @@@@@@@@@@@ aksdha @@" };
-        int size = 0;
-
-        cout << "\'" << s1 << "\'" << endl;
-
-        auto res = ShellOperations::splitString(s1, size, '@');
-
-        for (int i = 0; i < size; ++i)
-            cout << "\'" << res[i] << "\'" << endl;
-
-        delete[] res;
-    }
-    void testGetPath()
-    {
-        auto a = ShellOperations::getExecutablePath("ls");
-        cout << a << endl;
-        delete[] a;
-
-        cout << (a = ShellOperations::getExecutablePath("wc")) << endl;
-        delete[] a;
-
-        cout << (a = ShellOperations::getExecutablePath("./shell.o")) << endl;
-        delete[] a;
-    }
-}
-
-enum class CommandConjunction
-{
-    MSG_QUEUE,
-    SHARED_MEM,
-    PIPE,
-    INPUT_REDIRECT,
-    OUTPUT_REDIRECT,
-    OUTPUT_FILE
-};
-
 struct Command
 {
-    int fds[3];
-     char* path;
+    char* path;
     int argc;
     char** argv;
 };
 
-void printCommand(Command c)
+class Group
 {
-    cout << "Command : \n" << c.path << endl;
-    for (int i = 0; i < c.argc-1; ++i)
-        cout << c.argv[i] << ".";
-    cout << endl;
-}
+    static Group* createGroup(ASTNode* program)
+    {
+        Group* g = new Group;
 
+        ASTNode* cmds = program->children[0];
+        g->commandType = cmds->token->type;
+        g->endGroup = nullptr;
+        g->isBackground = program->isBackground;
+        g->isDaemon = program->isDaemon;
 
-void removeSpace(char* s)
-{
-    bool begin = true;
-    char* s2 = s;
-    do {
-        if (*s2 != ' ' && begin)
+        if (cmds->token->type == TokenType::TK_EXIT || cmds->token->type == TokenType::TK_FG || cmds->token->type == TokenType::TK_BG)
         {
-            begin = false;
-            *s++ = *s2;
+            Command c;
+            c.argv = new char*[2];
+            
+            int sz = cmds->token->lexeme.length() + 1;
+            c.argv[0] = new char[sz];
+            strcpy(c.argv[0], cmds->token->lexeme.c_str());
+
+            c.argv[1] = nullptr;
+
+            g->commands.push_back(c);
+            return g;
         }
-        else if(!begin)
-            *s++ = *s2;
-    } while (*s2++ && *s2!='\0');
-    *s = '\0';
-    *s--;
-    while(*s==' ')
-        *s--='\0';
+
+        while (cmds)
+        {
+            if (cmds->token != nullptr && cmds->token->type == TokenType::TK_COMMA)
+                break;
+
+            ASTNode* cmd = cmds->children[0];
+         
+            Command c;
+            c.path = ShellOperations::getExecutablePath(cmd->token->lexeme.c_str());
+            c.argc = 1;
+
+            while (cmd)
+            {
+                c.argc++;
+                cmd = cmd->sibling;
+            }
+
+            c.argv = new char*[c.argc];
+            cmd = cmds->children[0];
+            int cur_index = 0;
+
+            while (cmd)
+            {
+                int sz = cmd->token->lexeme.length() + 1;
+                c.argv[cur_index] = new char[sz];
+                strcpy(c.argv[cur_index], cmd->token->lexeme.c_str());
+                cmd = cmd->sibling;
+                cur_index++;
+            }
+
+            c.argv[c.argc - 1] = nullptr;
+            g->commands.push_back(c);
+            cmds = cmds->sibling;
+        }
+    
+        return g;
+    }
+
+public:
+    bool isDaemon = false;
+    bool isBackground = false;
+    TokenType commandType;
+    vector<Command> commands;
+    Group* endGroup;
+
+    void fillCommands(ASTNode* program)
+    {
+        auto group = createGroup(program);
+        this->isDaemon = group->isDaemon;
+        this->isBackground = group->isBackground;
+        this->commandType = group->commandType;
+        this->commands = group->commands;
+        this->endGroup = nullptr;
+
+        // TODO: Add comma support
+    }
+
+    friend std::ostream& operator<<(std::ostream&, const Group&);
+};
+
+std::ostream& operator<<(std::ostream& out, const Group& group)
+{
+    out << "Group: " << endl;
+    cout << group.commands.size() << endl;
+    for (auto& c : group.commands)
+    {
+        out << "Command: " << endl;
+        out << "Path: " << c.path << endl;
+        out << "Argc: " << c.argc << endl;
+        out << "Argv: ";
+        for (int i = 0; i < c.argc-1; ++i)
+            out << c.argv[i] << " ";
+        out << endl;
+    }
+    out << (group.isDaemon ? "Daemon" : "Not a daemon") << endl;
+    out << (group.isBackground ? "Background" : "Not a background") << endl;
+
+    return out;
 }
 
 class Shell
 {
+    vector<Group*> back_groups;   // TODO: maybe use set here in future
+
     Shell() {}
+
+    void _execCommand(const Group& group)
+    {
+        if (group.commands.size() == 1 && strcmp(group.commands[0].argv[0], "exit") == 0)
+            exit(0);
+
+        int temp_input = dup(0);
+        int temp_output = dup(1);
+
+        int fdin, fdout;
+        fdin = dup(temp_input);
+
+        int ret;
+        pid_t firstChildPid;
+        int firstChildGid;
+
+        for (int i = 0; i < group.commands.size() ; i++)
+        {
+            dup2(fdin,0);
+            close(fdin);
+            if (i == group.commands.size() - 1)
+            {
+                fdout = dup(temp_output);
+            }
+            else
+            {
+                int fdps[2];
+                pipe(fdps);
+                fdout = fdps[1];
+                fdin = fdps[0];
+            }
+
+            dup2(fdout, 1);
+            close(fdout);
+
+            if ((ret = fork()) == 0)
+            {
+                if (i != 0)
+                {
+                    cerr << "Setting group ID of process " << getpid() << " to " << firstChildGid << endl;
+                    if (setpgid(0, firstChildGid) < 0)
+                    {
+                        fprintf(stderr, "%s\n", explain_setpgid(pid, pgid));
+                    }
+                }
+                else
+                    setpgid(0, 0);
+                
+                cerr << i << ": pid - "  << getpid() << ", gid - " << getpgid(0) << endl;
+                if (execv(group.commands[i].path, group.commands[i].argv) == -1)
+                {
+                    perror("execv");
+                    exit(1);
+                }
+                perror("execv error");
+                exit(1);
+            }
+            else
+                setpgid(ret, firstChildGid);
+
+            if (!group.isBackground)
+            {
+                if (i == 0)
+                {
+                    firstChildGid = ret;
+                    cerr << ret << endl;
+                }
+                wait(NULL);
+            }
+        }
+
+        dup2(temp_input, 0);
+        dup2(temp_output, 1);
+        close(temp_input);
+        close(temp_output);
+
+        fflush(stdout);
+        cout << endl;
+    }
+
 public:
     Shell(Shell &)        = delete;
     void operator=(Shell &)  = delete;
+    
     static Shell& getInstance()
     { 
         static Shell instance;
         return instance;
     }
 
-    void executeCommands(char* cmd)
+    void executeCommand(ASTNode* program)
     {
-        //Get num of commands 
-        int pid;
-        int ret;
-        struct msqid_ds ctl_buf;
-        key_t key = ftok(MSGQ_PATH, 'a');
+        Group* g = new Group;
+        g->isDaemon = program->isDaemon;
+        g->isBackground = program->isBackground;
+        g->fillCommands(program);
 
-        vector<Command> commands;
-        int num_commands = 0;
-        char** cmds = ShellOperations::splitString(cmd, num_commands, '|');
+        _execCommand(*g);
 
-        //Creating a pipe
-        int pfds[2];
-        
-        for (int i  = 0; i<num_commands; i++)
-        {
-            Command c;
-            removeSpace(cmds[i]);
-            c.argv = ShellOperations::getCommandArguments(cmds[i], c.argc);
-            c.path = ShellOperations::getExecutablePath(c.argv[0]);
-            commands.push_back(c);
-            
-        }
-        delete[] cmds;
-
-        // for(auto c:commands)
-        //     printCommand(c);
-
-        //Create message queue
-        // SignalQueueID = msgget(key, IPC_CREAT|IPC_EXCL|0600);
-        // if (SignalQueueID == -1)
-        // {
-        //     perror("msgget:");
-        //     exit(1);
-        // }
-        // ret = msgctl(qid, IPC_STAT, &ctl_buf);
- 
-
-        for(int i=0;i<commands.size();i++) 
-        {
-            int status;
-            pipe(pfds);
-            pid = fork();
-            int numRead;
-            char * prev_output_buf[BUF_SIZE];
-            if(pid == 0)
-            {
-                //Child
-                if(commands.size()>1 && i!=commands.size()-1 && commands[i].fds[1]!=1)
-                {
-                    commands[i].fds[1] = pfds[1];
-                    cout << commands[i].fds[1] << endl;
-                    dup2(commands[i].fds[1], STDOUT_FILENO);
-                    close(commands[i].fds[1]);
-                }
-                if(i>0 &&commands[i].fds[0]!=0)
-                {
-                    dup2(commands[i].fds[0], STDIN_FILENO);
-                    close(commands[i].fds[0]);
-                }
-                
-                //cout << "Execing " <<  i << " " << commands[i].argv[0] << endl;
-                if(execvp(commands[i].path, commands[i].argv)<0)
-                {
-                    perror("execvp");
-                    exit(1);
-                }
-                break;
-            }
-            else
-            {
-                close(pfds[1]);
-                wait(&status);
-                if(i!=commands.size()-1) 
-                    commands[i+1].fds[0] = pfds[0];
-                delete[] commands[i].path;
-                delete[] commands[i].argv;
-            }
-        }
+        if (g->isBackground)
+            back_groups.push_back(g);
     }
 };
 
@@ -401,21 +400,24 @@ void printPrompt()
 
 void printTabs(int cnt)
 {
-    for(int i=0;i<cnt;i++)
-        printf("\t");
+    for (int i = 0; i < cnt; i++)
+        cout << "\t";
 }
 
 void printAST(ASTNode* node, int tabcnt)
 {
-    if(node==NULL)
+    if (node == nullptr)
         return;
+
     printTabs(tabcnt);
-    cout << *node << endl;
-    for(auto child:node->children)
-        printAST(child, tabcnt+1);
     
-    if(node->sibling)
-        printAST(node->sibling, tabcnt);
+    cout << *node << endl;
+    
+    for (auto child : node->children)
+        printAST(child, tabcnt + 2);
+    
+    if (node->sibling)
+        printAST(node->sibling, tabcnt + 1);
 }
 
 int main()
@@ -423,25 +425,32 @@ int main()
     freopen("shell.log","w",stderr);
     loadDFA();
     loadParser();
-    printPrompt();
 
     while (true)
     {
+        cout << endl;
+        printPrompt();
+
         string input;
         std::getline(std::cin, input);
 
-        if(!input.length())
+        if (!input.length())
             continue;
 
         Buffer b(input);
         bool isParseErr;
         auto x = parseInputSourceCode(b, isParseErr);
-        if(isParseErr)
+        
+        if (isParseErr)
+        {
             cout << "Input command is syntactically incorrect" << endl;
+            continue;
+        }
         
         ASTNode* ast = createAST(x);
-        printAST(ast,0);
-        printPrompt();
+        printAST(ast, 0);
+
+        Shell::getInstance().executeCommand(ast);
     }
 
     PAUSE;

@@ -97,7 +97,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 		
 		node->children.resize(1);
 		node->children[0] = createAST(input->children[0], input);
-		if (input->children[1]->children[0])
+		if (input->children[1] && input->children[1]->children.size()>0)
 		{
 			node->token = copy_token(input->children[1]->children[0]->token);
 			node->sibling = createAST(input->children[1], input);
