@@ -10,15 +10,9 @@ std::ostream& operator<<(std::ostream& out, const ASTNode& node)
 		"{ symbol: '" <<
 		parser.symbolType2symbolStr[node.sym_index] <<
 		"', lexeme: '" <<
-		(node.token ? node.token->lexeme : "") <<
-		", type: ";
+		(node.token ? node.token->lexeme : "") 
 
-	if (node.derived_type)
-		out << *(node.derived_type);
-	else
-		out << "(null)";
-
-	out << " }";
+	<< "' }";
 	return out;
 }
 
@@ -103,11 +97,10 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 		
 		node->children.resize(1);
 		node->children[0] = createAST(input->children[0], input);
-
 		if (input->children[1]->children[0])
 		{
 			node->token = copy_token(input->children[1]->children[0]->token);
-			node->children[0] = createAST(input->children[1], input);
+			node->sibling = createAST(input->children[1], input);
 		}
 		else
 		{
@@ -136,22 +129,45 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 		// remainCmd -> TK_SS ssCmd
 		delete node;
 		return createAST(input->children[1], input);
+		// node->children.resize(1);
+		// node->children[0] = createAST(input->children[1], input);
+		// node->sibling = createAST(input->children[1]->children[0], input);
 	}
 	else if (input->productionNumber == 16)
 	{
 		delete node;
 		return nullptr;
 	}
-	else if(input->productionNumber == 17 ||input->productionNumber == 20 || input->productionNumber == 24)
+	else if(input->productionNumber == 17)
 	{
 		// pipeCmd -> cmd pipeRemain
+		node->children.resize(1);
+		node->children[0] = createAST(input->children[0], input);
+		node->sibling = createAST(input->children[1], input);
+	}
+	else if(input->productionNumber == 20 || input->productionNumber == 24)
+	{
 		// hashCmd -> cmd hashRemain
 		// ssCmd -> cmd ssRemain
-		delete node;
-		ASTNode* left = createAST(input->children[1], input);
-		ASTNode* cmd = createAST(input->children[0], input);
-		cmd->sibling = left;
-		return cmd;
+
+		node->children.resize(1);
+		if(input->children[1] && input->children[1]->children[0]->token && input->children[1]->children[0]->token->type==TokenType::TK_COMMA)
+		{
+			node->token = copy_token(input->children[1]->children[0]->token);
+			node->children[0] = new ASTNode;
+			node->children[0]->children.resize(1);
+			node->children[0]->children[0] = createAST(input->children[0], input);
+			node->children[0]->sibling = createAST(input->children[1], input);
+		}
+		else
+		{
+			node->children[0] = createAST(input->children[0], input);
+			node->sibling = createAST(input->children[1], input);
+		}
+
+		// node->children.resize(1);
+		// node->children[0] = createAST(input->children[0], input);
+		// node->sibling = createAST(input->children[1], input);
 	}
 	else if (input->productionNumber == 19 || input->productionNumber == 23 || input->productionNumber == 27)
 	{
@@ -161,45 +177,65 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 		delete node;
 		return nullptr;
 	}
-	else if (input->productionNumber == 18 || input->productionNumber == 21 || input->productionNumber == 25)
+	else if (input->productionNumber == 18)
 	{
 		// pipeRemain -> TK_PIPE cmd pipeRemain
+		node->children.resize(1);
+		node->children[0] = createAST(input->children[1], input);
+		node->sibling = createAST(input->children[2], input);
+	}
+	else if (input->productionNumber == 21 || input->productionNumber == 25)
+	{
 		// hashRemain -> TK_HASH cmd hashRemain
 		// ssRemain -> TK_SS cmd ssRemain
-		delete node;
-		ASTNode* left = createAST(input->children[2], input);
-		ASTNode* cmd = createAST(input->children[1], input);
-		cmd->sibling = left;
-		return cmd;
+		node->children.resize(1);
+		if(input->children[2] && input->children[2]->children.size()>1 && input->children[2]->children[0]->token && input->children[2]->children[0]->token->type==TokenType::TK_COMMA)
+		{
+			node->token = copy_token(input->children[2]->children[0]->token);
+			node->children[0] = new ASTNode;
+			node->children[0]->children.resize(1);
+			node->children[0]->children[0] = createAST(input->children[1], input);
+			node->children[0]->sibling = createAST(input->children[2], input);
+		}
+		else
+		{
+			node->children[0] = createAST(input->children[1], input);
+			node->sibling = createAST(input->children[2], input);
+		}
 	}
 	else if (input->productionNumber == 22 || input->productionNumber == 26)
 	{
 		// hashRemain -> TK_COMMA commaCmd
 		// ssRemain -> TK_COMMA commaCmd
 		delete node;
-		ASTNode* comma = createAST(input->children[0], input);
-		
-		comma->children.resize(1);
-		comma->children[0] = createAST(input->children[1], input);
-		return comma;
+		return createAST(input->children[1], input);
+		// node->children.resize(1);
+		// node->children[0] = createAST(input->children[1], input);
+		// node->children[0]->sibling = createAST(input->children[1], input);
 	}
 	else if (input->productionNumber == 28)
 	{
 		// commaCmd -> cmd commaRemainder
-		delete node;
-		ASTNode* left = createAST(input->children[1], input);
-		ASTNode* cmd = createAST(input->children[0], input);
-		cmd->sibling = left;
-		return cmd;
+		node->children.resize(1);
+		node->children[0] = createAST(input->children[0], input);
+		node->sibling = createAST(input->children[1], input);
+		// delete node;
+		// ASTNode* left = createAST(input->children[1], input);
+		// ASTNode* cmd = createAST(input->children[0], input);
+		// cmd->sibling = left;
+		// return cmd;
 	}
 	else if (input->productionNumber == 29)
 	{
 		// commaRemainder -> TK_COMMA cmd commaRemainder
-		delete node;
-		ASTNode* left = createAST(input->children[2], input);
-		ASTNode* cmd = createAST(input->children[1], input);
-		cmd->sibling = left;
-		return cmd;
+		node->children.resize(1);
+		node->children[0] = createAST(input->children[1], input);
+		node->sibling = createAST(input->children[2], input);
+		// delete node;
+		// ASTNode* left = createAST(input->children[2], input);
+		// ASTNode* cmd = createAST(input->children[1], input);
+		// cmd->sibling = left;
+		// return cmd;
 	}
 	else if(input->productionNumber == 30)
 	{

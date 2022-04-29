@@ -56,7 +56,7 @@ ssRemain TK_SS cmd ssRemain
 ssRemain TK_COMMA commaCmd
 ssRemain eps
 commaCmd cmd commaRemainder
-commaRemainder TK_COMMA commaRemainder
+commaRemainder TK_COMMA cmd commaRemainder
 commaRemainder eps
 num_terminals num_nonterminals num_productions index_start_symbol
 'num_nonterminals' lines each having one string representing the non terminals

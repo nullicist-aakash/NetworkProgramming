@@ -399,6 +399,24 @@ void printPrompt()
 	printf("\033[0m");
 }
 
+void printTabs(int cnt)
+{
+    for(int i=0;i<cnt;i++)
+        printf("\t");
+}
+
+void printAST(ASTNode* node, int tabcnt)
+{
+    if(node==NULL)
+        return;
+    printTabs(tabcnt);
+    cout << *node << endl;
+    for(auto child:node->children)
+        printAST(child, tabcnt+1);
+    
+    if(node->sibling)
+        printAST(node->sibling, tabcnt);
+}
 
 int main()
 {
@@ -421,8 +439,8 @@ int main()
         if(isParseErr)
             cout << "Input command is syntactically incorrect" << endl;
         
-        createAST(x);
-
+        ASTNode* ast = createAST(x);
+        printAST(ast,0);
         printPrompt();
     }
 
