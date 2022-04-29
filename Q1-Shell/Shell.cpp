@@ -10,6 +10,7 @@
 #include <sys/msg.h>
 #include "Lexer.h"
 #include "Parser.h"
+#include "AST.h"
 
 
 using namespace std;
@@ -420,6 +421,8 @@ int main()
         if(isParseErr)
             cout << "Input command is syntactically incorrect" << endl;
         
+        createAST(x);
+
         printPrompt();
     }
 
