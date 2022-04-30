@@ -1,0 +1,69 @@
+12 16 31 12
+eps
+TK_TOKEN
+TK_DAEMON
+TK_PIPE
+TK_HASH
+TK_SS
+TK_COMMA
+TK_AND
+TK_FG
+TK_BG
+TK_EXIT
+TK_END
+input
+daemon
+command
+redirect
+isBackground
+cmd
+remainCmd
+args
+pipeCmd
+hashCmd
+ssCmd
+pipeRemain
+hashRemain
+ssRemain
+commaCmd
+commaRemainder
+input daemon command redirect isBackground TK_END
+input TK_EXIT
+input TK_FG
+input TK_BG
+daemon TK_DAEMON
+daemon eps
+redirect eps
+isBackground TK_AND
+isBackground eps
+command cmd remainCmd
+cmd TK_TOKEN args
+args TK_TOKEN args
+args eps
+remainCmd TK_PIPE pipeCmd
+remainCmd TK_HASH hashCmd
+remainCmd TK_SS ssCmd
+remainCmd eps
+pipeCmd cmd pipeRemain
+pipeRemain TK_PIPE cmd pipeRemain
+pipeRemain eps
+hashCmd cmd hashRemain
+hashRemain TK_HASH cmd hashRemain
+hashRemain TK_COMMA commaCmd
+hashRemain eps
+ssCmd cmd ssRemain
+ssRemain TK_SS cmd ssRemain
+ssRemain TK_COMMA commaCmd
+ssRemain eps
+commaCmd cmd commaRemainder
+commaRemainder TK_COMMA cmd commaRemainder
+commaRemainder eps
+num_terminals num_nonterminals num_productions index_start_symbol
+'num_nonterminals' lines each having one string representing the non terminals
+'num_productions' lines each having the follownig format: //convention to add space at the end of rule.
+Non_Terminal Production
+for example for S-ABC we have line entry as
+'S A B C'
+and for S-ABC|De we have two lines as:
+S A B C
+S D e
