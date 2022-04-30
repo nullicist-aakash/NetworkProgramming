@@ -315,7 +315,12 @@ vector<sockaddr_in> getFileIPAddresses(ifstream &stream)
         if (DNSResolver::getAddr(s.c_str(), sa, true) == -1)
             cerr << "Could not resolve IP for website: " << s <<  endl;
         else
+        {
+            char buff[20];
+
+            cout << s << "\t" << inet_ntop(AF_INET, &sa.sin_addr, buff, sizeof(buff)) << endl;
             ret.push_back(sa);
+        }
     }
 
     return ret;
@@ -333,6 +338,8 @@ int main(int argc, char** argv)
         return -1;
     }
 
+    cout << "MAX TTL: " << max_ttl << endl;
+
     // Get all IP addresses
     cout << "Generating Random IP Addresses" << endl;
     service.addRemoteHosts(getIPAddresses(atoi(argv[1])));
@@ -349,14 +356,18 @@ int main(int argc, char** argv)
     sigaction(SIGALRM, &new_action, NULL);
     sig_alrm(SIGALRM);
 
+    vector<int> ips;
+
     // seteuid(1000);
     for (int i = 0; i < 20; ++i)
     {
+        set<uint32_t> addrs;
         cerr << "TTL: " << i + 1 << endl;
         service.sendnextTTLRequests();
 
         for (int i = 0; i < service.SA_Send.size(); ++i)
         {
+
             if (service.finishedIPs.find(i) != service.finishedIPs.end())
                 continue;
 
@@ -380,9 +391,40 @@ int main(int argc, char** argv)
                 if (comm.receive_status == -1)
                     service.finishedIPs.insert(i);
             }
+        
+            for (auto &x: service.sentSeqs[i])
+            {
+                auto &addr = service.requests[x].recv_sock_addr;
+                auto addr_in = *(sockaddr_in*)&addr;
+                uint32_t val = addr_in.sin_addr.s_addr;
+                addrs.insert(val);
+            }
         }
+    
+        addrs.erase(0);
+
+        if (ips.size() == i && addrs.size() == 1)
+            ips.push_back(*addrs.begin());
     }
 
+    cout << "Common Path: ";
+
+    if (ips.size() == 0)
+    {
+        cout << "NA" << endl;
+    }
+    else
+    {
+        for (auto &ip: ips)
+        {
+            in_addr addr;
+            addr.s_addr = ip;
+            char buff[1500];
+            cout << inet_ntop(AF_INET, &addr, buff, 1500) << " --> ";
+        }
+
+        cout << "*" << endl;
+    }
 
     return 0;
 }
