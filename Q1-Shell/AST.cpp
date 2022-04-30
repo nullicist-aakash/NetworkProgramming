@@ -100,7 +100,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 		if (input->children[1] && input->children[1]->children.size()>0)
 		{
 			node->token = copy_token(input->children[1]->children[0]->token);
-			node->sibling = createAST(input->children[1], input);
+			node->children[0]->sibling = createAST(input->children[1], input);
 		}
 		else
 		{
@@ -113,8 +113,10 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	{
 		// cmd -> TK_TOKEN args
 		// args -> TK_TOKEN args
-		node->token = copy_token(input->children[0]->token);
-		node->sibling = createAST(input->children[1], input);
+		node->children.resize(1);
+		node->children[0] = new ASTNode;
+		node->children[0]->token = copy_token(input->children[0]->token);
+		node->children[0]->sibling = createAST(input->children[1], input);
 	}
 	else if (input->productionNumber == 12)
 	{
@@ -141,9 +143,14 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if(input->productionNumber == 17)
 	{
 		// pipeCmd -> cmd pipeRemain
-		node->children.resize(1);
-		node->children[0] = createAST(input->children[0], input);
-		node->sibling = createAST(input->children[1], input);
+		delete node;
+		ASTNode* left = createAST(input->children[1], input);
+		ASTNode* cmd = createAST(input->children[0], input);
+		cmd->sibling = left;
+		return cmd;
+		// node->children.resize(1);
+		// node->children[0] = createAST(input->children[0], input);
+		// node->sibling = createAST(input->children[1], input);
 	}
 	else if(input->productionNumber == 20 || input->productionNumber == 24)
 	{
@@ -151,7 +158,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 		// ssCmd -> cmd ssRemain
 
 		node->children.resize(1);
-		if(input->children[1] && input->children[1]->children[0]->token && input->children[1]->children[0]->token->type==TokenType::TK_COMMA)
+		if(input->children[1] && input->children[1]->children.size() > 0 && input->children[1]->children[0]->token && input->children[1]->children[0]->token->type==TokenType::TK_COMMA)
 		{
 			node->token = copy_token(input->children[1]->children[0]->token);
 			node->children[0] = new ASTNode;
@@ -180,9 +187,14 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if (input->productionNumber == 18)
 	{
 		// pipeRemain -> TK_PIPE cmd pipeRemain
-		node->children.resize(1);
-		node->children[0] = createAST(input->children[1], input);
-		node->sibling = createAST(input->children[2], input);
+		delete node;
+		ASTNode* left = createAST(input->children[2], input);
+		ASTNode* cmd = createAST(input->children[1], input);
+		cmd->sibling = left;
+		return cmd;
+		// node->children.resize(1);
+		// node->children[0] = createAST(input->children[1], input);
+		// node->sibling = createAST(input->children[2], input);
 	}
 	else if (input->productionNumber == 21 || input->productionNumber == 25)
 	{
