@@ -7,12 +7,11 @@ std::ostream& operator<<(std::ostream&, const TypeLog&);
 
 struct ASTNode
 {
-	bool isBackground;
-	bool isDaemon;
-	int fds[3];
+	bool isBackground = 0;
+	bool isDaemon = 0;
+	int fds[3] = { 0, 0, 0 };
 	int sym_index = 0;
 
-	TypeLog* derived_type = nullptr;
 	Token* token = nullptr;
 	ASTNode* type = nullptr;
 	std::vector<ASTNode*> children;

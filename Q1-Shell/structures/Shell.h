@@ -14,10 +14,6 @@ public:
 
     static Shell& getInstance();
 
-    char** splitString(char* input, int &size, char delim = ' ');
-
-    char* getExecutablePath(const char* execName);
-
     void executeJob(const char* input);
 
     void initialize();
@@ -25,6 +21,4 @@ public:
     void printPrompt() const;
 
     Job* findJob(pid_t pgid);
-
-    int markProcessStatus(pid_t pid, int status);
 };

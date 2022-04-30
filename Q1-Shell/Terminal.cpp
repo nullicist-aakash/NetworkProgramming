@@ -15,32 +15,10 @@ using namespace std;
 #define CLEAR_INPUT { char c; while ((c = getchar()) != '\n' && c != '\r' && c != EOF); }
 #define BUF_SIZE 1024
 
-void printTabs(int cnt)
-{
-    for (int i = 0; i < cnt; i++)
-        cout << "\t";
-}
-
-void printAST(ASTNode* node, int tabcnt)
-{
-    if (node == nullptr)
-        return;
-
-    printTabs(tabcnt);
-    
-    cout << *node << endl;
-    
-    for (auto child : node->children)
-        printAST(child, tabcnt + 2);
-    
-    if (node->sibling)
-        printAST(node->sibling, tabcnt + 1);
-}
-
 int main()
 {
     Shell::getInstance().initialize();
-
+    freopen("/dev/null", "w", stderr);
     loadDFA();
     loadParser();
 

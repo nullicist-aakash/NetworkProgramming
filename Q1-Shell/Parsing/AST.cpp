@@ -49,17 +49,24 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	{
 		//input -> daemon command redirect isBackground TK_END
 		ASTNode* dem = createAST(input->children[0], input);
-		ASTNode* bg = createAST(input->children[3],input);
+		ASTNode* bg = createAST(input->children[3], input);
+
 		node->isDaemon = dem == nullptr ? false : true; 
 		node->isBackground = bg == nullptr ? false : true;
 		node->children.resize(1);
 		node->children[0] = createAST(input->children[1], input);
+
+		if (dem)
+			delete dem;
+		if (bg)
+			delete bg;
+
 		//TODO:: handle redirect
 
 	}
 	else if (input->productionNumber <= 3)
 	{
-		//input -> TK_FG
+		// input -> TK_FG
 		node->children.resize(1);
 		node->children[0] = createAST(input->children[0], input);
 	}
@@ -94,29 +101,33 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if(input->productionNumber == 9)
 	{
 		// command -> cmd remainCmd
-		
+		if (input->children[1]->children.size() == 0)
+		{
+			delete node;
+			return createAST(input->children[0], input);
+		}
+
 		node->children.resize(1);
 		node->children[0] = createAST(input->children[0], input);
-		if (input->children[1] && input->children[1]->children.size()>0)
-		{
-			node->token = copy_token(input->children[1]->children[0]->token);
-			node->children[0]->sibling = createAST(input->children[1], input);
-		}
-		else
-		{
-			node->token = new Token;
-			node->token->type = TokenType::TK_TOKEN;
-		}
-	
+		node->token = copy_token(input->children[1]->children[0]->token);
+		node->children[0]->sibling = createAST(input->children[1], input);
 	}
-	else if (input->productionNumber <= 11)
+	else if (input->productionNumber == 10)
 	{
 		// cmd -> TK_TOKEN args
-		// args -> TK_TOKEN args
 		node->children.resize(1);
-		node->children[0] = new ASTNode;
-		node->children[0]->token = copy_token(input->children[0]->token);
+		node->token = new Token;
+		node->token->type = TokenType::TK_TOKEN;
+		node->children[0] = createAST(input->children[0], input);
 		node->children[0]->sibling = createAST(input->children[1], input);
+	}
+	else if (input->productionNumber == 11)
+	{
+		// args -> TK_TOKEN args
+		delete node;
+		auto ret = createAST(input->children[0], input);
+		ret->sibling = createAST(input->children[1], input);
+		return ret;
 	}
 	else if (input->productionNumber == 12)
 	{
@@ -131,28 +142,26 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 		// remainCmd -> TK_SS ssCmd
 		delete node;
 		return createAST(input->children[1], input);
-		// node->children.resize(1);
-		// node->children[0] = createAST(input->children[1], input);
-		// node->sibling = createAST(input->children[1]->children[0], input);
 	}
 	else if (input->productionNumber == 16)
 	{
+		// remainCmd -> eps
 		delete node;
 		return nullptr;
 	}
-	else if(input->productionNumber == 17)
+	else if (input->productionNumber == 17)
 	{
 		// pipeCmd -> cmd pipeRemain
 		delete node;
-		ASTNode* left = createAST(input->children[1], input);
 		ASTNode* cmd = createAST(input->children[0], input);
+		ASTNode* left = createAST(input->children[1], input);
 		cmd->sibling = left;
 		return cmd;
 		// node->children.resize(1);
 		// node->children[0] = createAST(input->children[0], input);
 		// node->sibling = createAST(input->children[1], input);
 	}
-	else if(input->productionNumber == 20 || input->productionNumber == 24)
+	else if (input->productionNumber == 20 || input->productionNumber == 24)
 	{
 		// hashCmd -> cmd hashRemain
 		// ssCmd -> cmd ssRemain

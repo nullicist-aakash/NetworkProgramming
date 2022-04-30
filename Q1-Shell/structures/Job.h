@@ -3,10 +3,9 @@
 #include "../Parsing/AST.h"
 #include "Process.h"
 
-class Job{
+class Job
+{
 private:
-    char* command;
-    ASTNode* node;
     bool isBackground;
     bool notified;
     int stdin;
@@ -14,12 +13,12 @@ private:
     int stderr;
 
     void waitForJob();
-    void putInForeground(int shell_terminal, int shell_pgid, int cont);
+
+    void putInForeground(int cont);
 
     void putInBackground(int cont);
 
 public:
-    
     pid_t pgid;
     Process* firstProcess;
     Job* next;
@@ -29,5 +28,5 @@ public:
     ~Job();
     bool isStopped() const;
     bool isCompleted() const;
-    void launch(int shell_terminal);
+    void launch();
 };

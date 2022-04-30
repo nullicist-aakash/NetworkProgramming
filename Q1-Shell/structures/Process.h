@@ -14,5 +14,5 @@ public:
     int status;
 
     Process(ASTNode* command);
-    void launch(int shell_terminal, pid_t pgid, std::vector<int> fds, bool isBackground);
+    void launch(pid_t pgid, std::vector<int> fds, bool isBackground);
 };
