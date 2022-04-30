@@ -95,57 +95,9 @@ namespace RandomIPGenerator
     }
 }
 
-class Address
-{
-    const char* hostname;
-    const char* servType;
-    addrinfo temp;
-    addrinfo* info;
-    char* hostIP;
-
-public:
-    Address(const char* hostname, const char* serviceType = nullptr, int sockFamily = 0, int sockectType = 0) : servType { serviceType }, hostname {hostname}
-    {
-        bzero(&temp, sizeof(temp));
-        temp.ai_flags = AI_CANONNAME;
-        temp.ai_family = sockFamily;
-        temp.ai_socktype = sockectType;
-
-        info = nullptr;
-        hostIP = new char[128];
-        hostIP[0] = 0;
-    }
-
-    const addrinfo* getHostAddrInfo()
-    {
-        if (!info && getaddrinfo(hostname, servType, &temp, &info) != 0)
-            info = nullptr;
-
-        return info;
-    }
-
-    const char* getHostIP()
-    {
-        auto sa = (sockaddr_in*)info->ai_addr;
-        auto x =  &sa->sin_addr;
-        if (!hostIP[0] && info && inet_ntop(AF_INET, x, hostIP, 128) == NULL)
-        {
-            hostIP[0] = 0;
-            return nullptr;
-        }
-
-        return hostIP;
-    }
-
-    ~Address()
-    {
-        freeaddrinfo(info);
-        delete[] hostIP;
-    }
-};
-
 constexpr int max_ttl = 30;                         // Maximum value of TTL to reach from 1 in succession
 constexpr int ICMPSize = sizeof(ICMPInfo);          // size of payload
+const int num_probes = 3;
 
 void tv_sub(struct timeval *out, struct timeval *in)
 {
