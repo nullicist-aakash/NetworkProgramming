@@ -76,7 +76,7 @@ Job::Job(ASTNode* input)
     
     if (input->isDaemon && input->children[0]->token->type != TokenType::TK_TOKEN)
     {
-        cerr << "Invalid Command!! No pipe is supported with daemon. Shell will now exit" << endl;
+        cout << "Invalid Command!! No pipe is supported with daemon. Shell will now exit" << endl;
         exit(-1);
     }
 
@@ -98,9 +98,52 @@ Job::Job(ASTNode* input)
 
     this->isBackground = input->isBackground;
     this->isDaemon = input->isDaemon;
-    stdin = dup(0);
-    stdout = dup(1);
     stderr = dup(1);
+
+    if (input->children[1])
+    {
+        auto redirect = input->children[1];
+
+        // redirect stdio
+        if (redirect->children[0])
+        {
+            string fileLoc = redirect->children[0]->children[0]->token->lexeme;
+            FILE* fp = fopen(fileLoc.c_str(), "r");
+            if (fp == NULL)
+            {
+                cout << fileLoc << ": " << strerror(errno) << ". Shell will now exit" << endl;
+                exit(-1);
+            }
+            
+            stdin = fileno(fp);
+        }
+        else
+        {
+            stdin = dup(0);
+        }
+
+        // redirect stdout
+        if (redirect->children[1])
+        {
+            string fileLoc = redirect->children[1]->children[0]->token->lexeme;
+            FILE* fp;
+
+            if (redirect->children[1]->token->type == TokenType::TK_OUT_NEW_REDIRECT)
+                fp = fopen(fileLoc.c_str(), "w");
+            else
+                fp = fopen(fileLoc.c_str(), "a");
+            
+            if (fp == NULL)
+            {
+                cout << fileLoc << ": " << strerror(errno) << ". Shell will now exit" << endl;
+                exit(-1);
+            }
+
+            stdout = fileno(fp);            
+        }
+        else
+            stdout = dup(1);
+    }
 }
 
 Job::~Job()
