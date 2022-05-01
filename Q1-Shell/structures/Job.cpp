@@ -1,6 +1,8 @@
 #include "Job.h"
 #include "Shell.h"
 #include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <iostream>
 using namespace std;
@@ -72,6 +74,12 @@ Job::Job(ASTNode* input)
 {
     ASTNode* commands = input->children[0];
     
+    if (input->isDaemon && input->children[0]->token->type != TokenType::TK_TOKEN)
+    {
+        cerr << "Invalid Command!! No pipe is supported with daemon. Shell will now exit" << endl;
+        exit(-1);
+    }
+
     if (input->children[0]->token->type == TokenType::TK_TOKEN)
         this->firstProcess = new Process(commands);
     else if (input->children[0]->token->type == TokenType::TK_EXIT)
@@ -89,12 +97,10 @@ Job::Job(ASTNode* input)
     }
 
     this->isBackground = input->isBackground;
-    this->notified = 0;
+    this->isDaemon = input->isDaemon;
     stdin = dup(0);
     stdout = dup(1);
     stderr = dup(2);
-    pgid = 0;
-    next = nullptr;
 }
 
 Job::~Job()
@@ -135,6 +141,32 @@ void Job::launch()
     int pfds[2], infile, outfile;
 
     infile = this->stdin;
+
+    if (this->isDaemon)
+    {
+        cout << "Launching daemon" << endl;
+
+        if (fork() != 0)
+            return;
+        
+        if ((pid = fork()) != 0)
+            exit(0);
+        
+        auto input = fdopen(this->stdin, "r");
+        freopen("/dev/null", "r", input);
+        freopen("daemonStdOut.log", "w", fdopen(this->stdout, "w"));
+        freopen("daemonStdErr.log", "w", fdopen(this->stdout, "w"));
+
+        setsid();
+        chdir("/");
+
+        umask(0);
+
+        this->firstProcess->launch(this->pgid, { this->stdin, this->stdout, this->stderr }, false);
+        
+        // no need to call exit
+    }
+
     for (auto p = this->firstProcess; p; p = p->next)
     {
         //  Setup pipes

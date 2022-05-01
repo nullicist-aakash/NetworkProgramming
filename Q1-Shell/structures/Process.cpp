@@ -155,6 +155,12 @@ void Process::launch(pid_t pgid, vector<int> fds, bool isBackground)
 
     char* path = getExecutablePath(this->argv[0]);
     
+    if (path == 0)
+    {
+        cout << "Could not find the path for " << this->argv[0] << " to execute" << endl;
+        exit(1);
+    }
+
     execv(path, this->argv);
     perror("execv");
     exit(1);

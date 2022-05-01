@@ -45,7 +45,7 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	ASTNode* node = new ASTNode;
 	node->sym_index = input->symbol_index;
 
-	if(input->productionNumber == 0)
+	if (input->productionNumber == 0)
 	{
 		//input -> daemon command redirect isBackground TK_END
 		ASTNode* dem = createAST(input->children[0], input);

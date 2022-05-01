@@ -6,8 +6,9 @@
 class Job
 {
 private:
-    bool isBackground;
-    bool notified;
+    bool isBackground = false;
+    bool notified = false;
+    bool isDaemon = false;
     int stdin;
     int stdout;
     int stderr;
@@ -19,9 +20,10 @@ private:
     void putInBackground(int cont);
 
 public:
-    pid_t pgid;
-    Process* firstProcess;
-    Job* next;
+    friend class Shell;
+    pid_t pgid = 0;
+    Process* firstProcess = nullptr;
+    Job* next = nullptr;
 
     Job(ASTNode* input);
 

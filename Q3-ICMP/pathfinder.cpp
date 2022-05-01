@@ -280,7 +280,7 @@ class ICMPService
         
         char recvbuff[1500];
         gotalarm = 0;
-        alarm(3);
+        alarm(2);
 
         start:
         if (gotalarm)
@@ -420,7 +420,8 @@ public:
             if (finishedIPs.find(i) == finishedIPs.end())
                 send_req(i, ttl, i == 0);
         
-        Receiver(this);
+        if (finishedIPs.size() != SA_Send.size())
+            Receiver(this);
     }
 
     ~ICMPService()
@@ -468,7 +469,7 @@ vector<sockaddr_in> getFileIPAddresses(ifstream &stream)
         {
             char buff[20];
 
-            cout << s << "\t" << inet_ntop(AF_INET, &sa.sin_addr, buff, sizeof(buff)) << endl;
+            cerr << s << "\t" << inet_ntop(AF_INET, &sa.sin_addr, buff, sizeof(buff)) << endl;
             ret.push_back(sa);
         }
     }
@@ -476,10 +477,9 @@ vector<sockaddr_in> getFileIPAddresses(ifstream &stream)
     return ret;
 }
 
-ICMPService service;
-
 int main(int argc, char** argv)
 {
+    ICMPService service;
     srand(time(NULL));
 
     if (argc != 2)
@@ -491,15 +491,13 @@ int main(int argc, char** argv)
     cout << "MAX TTL: " << max_ttl << endl;
 
     // Get all IP addresses
-    cout << "Generating Random IP Addresses" << endl;
     service.addRemoteHosts(getIPAddresses(atoi(argv[1])));
     ifstream inf { "urls.txt" };
     if (!inf)
         cerr << "Could not open file urls.txt for reading!!" << endl;
-    
-    cout << "Generating IP Addresses from urls in file" << endl;
+
     service.addRemoteHosts(getFileIPAddresses(inf));
-    cout << "IP Address generation completed" << endl;
+    cout << endl;
 
     struct sigaction new_action { .sa_flags = 0 };
     new_action.sa_handler = sig_alrm;
@@ -508,39 +506,46 @@ int main(int argc, char** argv)
 
     vector<int> ips;
 
+    freopen("/dev/null", "w", stderr);
+
     // seteuid(1000);
     for (int i = 0; i < 20; ++i)
     {
         set<uint32_t> addrs;
-        cerr << "TTL: " << i + 1 << endl;
+        cout << "TTL: " << i + 1 << endl;
         service.sendnextTTLRequests();
 
         for (int i = 0; i < service.SA_Send.size(); ++i)
         {
-
             if (service.finishedIPs.find(i) != service.finishedIPs.end())
                 continue;
 
-            char buff[100];
-            cerr << "For host " << inet_ntop(AF_INET, &service.SA_Send[i].sin_addr, buff, 100) << endl;
+            char buff[16];
+            cout << setw(16) << inet_ntop(AF_INET, &service.SA_Send[i].sin_addr, buff, 100) << ":";
 
             for (auto &x: service.sentSeqs[i])
             {
                 auto comm = service.requests[x];
                 if (comm.recvInfo == nullptr)
                 {
-                    cerr << "\t*" << endl;
+                    cout << setw(30) << "*";
                     continue;
                 }
 
                 tv_sub(&comm.recvInfo->rec_tv, &comm.sentInfo->rec_tv);
                 double rtt = comm.recvInfo->rec_tv.tv_sec * 1000.0 + comm.recvInfo->rec_tv.tv_usec / 1000.0;
-
-                cerr << "\t" <<  inet_ntop(AF_INET, &(((sockaddr_in*)(&comm.recv_sock_addr))->sin_addr), buff, 100) << ": " << rtt << "ms" << endl;
+                
+                string s;
+                stringstream ss;
+                ss << rtt << "ms (" << inet_ntop(AF_INET, &(((sockaddr_in*)(&comm.recv_sock_addr))->sin_addr), buff, 16) << ")";
+                getline(ss, s);
+                cout << setw(30) << s;
             
                 if (comm.receive_status == -1)
                     service.finishedIPs.insert(i);
             }
+
+            cout << endl;
         
             for (auto &x: service.sentSeqs[i])
             {
@@ -555,25 +560,36 @@ int main(int argc, char** argv)
 
         if (ips.size() == i && addrs.size() == 1)
             ips.push_back(*addrs.begin());
+        else if (ips.size() == i && addrs.size() == 0)
+            ips.push_back(0);
+
+        cout << endl;
     }
+
+    while (ips.back() == 0)
+        ips.pop_back();
 
     cout << "Common Path: ";
 
     if (ips.size() == 0)
-    {
         cout << "NA" << endl;
-    }
     else
     {
         for (auto &ip: ips)
         {
+            if (ip == 0)
+            {
+                cout << "* --> ";
+                continue;
+            }
+
             in_addr addr;
             addr.s_addr = ip;
             char buff[1500];
             cout << inet_ntop(AF_INET, &addr, buff, 1500) << " --> ";
         }
 
-        cout << "*" << endl;
+        cout << "DIVERGES" << endl;
     }
 
     return 0;
