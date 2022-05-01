@@ -100,7 +100,7 @@ Job::Job(ASTNode* input)
     this->isDaemon = input->isDaemon;
     stdin = dup(0);
     stdout = dup(1);
-    stderr = dup(2);
+    stderr = dup(1);
 }
 
 Job::~Job()
