@@ -53,9 +53,10 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 
 		node->isDaemon = dem == nullptr ? false : true; 
 		node->isBackground = bg == nullptr ? false : true;
-		node->children.resize(1);
+		node->children.resize(2);
 		node->children[0] = createAST(input->children[1], input);
-
+		node->children[1] = createAST(input->children[2], input);
+		
 		if (dem)
 			delete dem;
 		if (bg)
@@ -261,6 +262,46 @@ ASTNode* createAST(const ParseTreeNode* input, const ParseTreeNode* parent, ASTN
 	else if(input->productionNumber == 30)
 	{
 		// commaRemainder -> eps
+		delete node;
+		return nullptr;
+	}
+	else if (input->productionNumber == 31)
+	{
+		// redirect -> inputRe outputRe
+		node->children.resize(2);
+		node->children[0] = createAST(input->children[0], input);
+		node->children[1] = createAST(input->children[1], input);
+	}
+	else if (input->productionNumber == 32)
+	{
+		// inputRe -> TK_IN_REDIRECT TK_TOKEN
+		node->token = copy_token(input->children[0]->token);
+		node->children.resize(1);
+		node->children[0] = createAST(input->children[1], input);
+	}
+	else if (input->productionNumber == 33)
+	{
+		// inputRe -> eps
+		delete node;
+		return nullptr;
+	}
+	else if (input->productionNumber == 34)
+	{
+		// outputRe -> TK_OUT_NEW_REDIRECT TK_TOKEN
+		node->token = copy_token(input->children[0]->token);
+		node->children.resize(1);
+		node->children[0] = createAST(input->children[1], input);
+	}
+	else if (input->productionNumber == 35)
+	{
+		// outputRe -> TK_OUT_APPEND_REDIRECT TK_TOKEN
+		node->token = copy_token(input->children[0]->token);
+		node->children.resize(1);
+		node->children[0] = createAST(input->children[1], input);
+	}
+	else if (input->productionNumber == 36)
+	{
+		// outputRe eps
 		delete node;
 		return nullptr;
 	}

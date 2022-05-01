@@ -18,7 +18,7 @@ using namespace std;
 int main()
 {
     Shell::getInstance().initialize();
-    freopen("/dev/null", "w", stderr);
+    freopen("shellLog.log", "w", stderr);
     loadDFA();
     loadParser();
 

@@ -1,4 +1,4 @@
-12 16 31 12
+15 18 37 15
 eps
 TK_TOKEN
 TK_DAEMON
@@ -9,6 +9,9 @@ TK_COMMA
 TK_AND
 TK_FG
 TK_BG
+TK_IN_REDIRECT
+TK_OUT_NEW_REDIRECT
+TK_OUT_APPEND_REDIRECT
 TK_EXIT
 TK_END
 input
@@ -27,6 +30,8 @@ hashRemain
 ssRemain
 commaCmd
 commaRemainder
+inputRe
+outputRe
 input daemon command redirect isBackground TK_END
 input TK_EXIT
 input TK_FG
@@ -58,6 +63,12 @@ ssRemain eps
 commaCmd cmd commaRemainder
 commaRemainder TK_COMMA cmd commaRemainder
 commaRemainder eps
+redirect inputRe outputRe
+inputRe TK_IN_REDIRECT TK_TOKEN
+inputRe eps
+outputRe TK_OUT_NEW_REDIRECT TK_TOKEN
+outputRe TK_OUT_APPEND_REDIRECT TK_TOKEN
+outputRe eps
 num_terminals num_nonterminals num_productions index_start_symbol
 'num_nonterminals' lines each having one string representing the non terminals
 'num_productions' lines each having the follownig format: //convention to add space at the end of rule.
