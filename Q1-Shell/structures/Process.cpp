@@ -146,12 +146,35 @@ void Process::launch(pid_t pgid, vector<int> fds, bool isBackground)
     for(int sig : signals)
         signal(sig, SIG_DFL);
 
+    int display_fd = dup(1);
+
     for (int i = 0; i < 3; i++)
         if (fds[i] != i)
         {
             dup2(fds[i], i);
             close(fds[i]);
         }
+
+    char* num = new char[1];
+    write(display_fd,"Input fd : ",11);
+    sprintf(num, "%d", fds[0]);
+    write(display_fd,num,strlen(num));
+    write(display_fd,"\n",1);
+
+    write(display_fd,"Output fd : ",11);
+    sprintf(num, "%d", fds[1]);
+    write(display_fd,num,strlen(num));
+    write(display_fd,"\n",1);
+
+    write(display_fd,"Error fd : ",11);
+    sprintf(num, "%d", fds[2]);
+    write(display_fd,num,strlen(num));
+    write(display_fd,"\n",1);
+
+    write(display_fd,"PID : ",6);
+    sprintf(num, "%d", pid);
+    write(display_fd,num,strlen(num));
+    write(display_fd,"\n\n",2);
 
     char* path = getExecutablePath(this->argv[0]);
     
