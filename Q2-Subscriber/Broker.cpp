@@ -16,7 +16,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <arpa/inet.h>
-#include "helpers/SocketIO.h"
+#include "helpers/Time.h"
+#include "helpers/SocketLayer.h"
 #include "helpers/Database.h"
 #include "helpers/ThreadPool.h"
 #include "helpers/Queue.h"
@@ -27,6 +28,7 @@ struct ServerInfo
 {
     const Queue<int> *q;
     ThreadPool thread_pool;
+    pthread_mutex_t send_mutex = PTHREAD_MUTEX_INITIALIZER;
 
     const int PORT, server_send_port, server_recv_port;
     SocketInfo sendServerPORTInfo;
@@ -43,424 +45,437 @@ struct ServerInfo
     }
 } *info;
 
-void printServerMessage(ServerMessage* servmsg)
-{
-    cerr << currentDateTime() << " - \t{ Source Server PORT: " << servmsg->sender_server_port << 
-            ", Source Server thread: " << servmsg->sender_thread_id << ", time: " << DateTime(servmsg->time_of_req) << " }" << endl;
+unordered_map<int, vector<ClientPayload>> serv_response;
 
-    print(servmsg->cli_msg, true);
+void accumulateResponses(int threadid, const vector<ClientPayload> &send_data)
+{
+    // prepare request for neighboring server
+    vector<ServerPayload> serv_payload;
+    for (auto &x: send_data)
+    {
+        ServerPayload p;
+        p.sender_server_port = info->PORT;
+        p.sender_thread_id = threadid;
+
+        memcpy(&p.client_payload, &x, sizeof(ClientPayload));
+        serv_payload.push_back(p);
+    }
+
+    cerr << "Locking info->send_mutex" << endl;
+    // send request to neighboring server
+    pthread_mutex_lock(&info->send_mutex);
+    PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, serv_payload);
+    cerr << "Unlocking info->send_mutex" << endl;
+    pthread_mutex_unlock(&info->send_mutex);
+
+    // wait for the receive function to release the lock
+    cerr << "Waiting on thread mutex" << endl;
+    pthread_cond_wait(
+        &info->thread_pool.getCondFromThreadID(threadid), 
+        &info->thread_pool.getMutexFromThreadID(threadid));
+    cerr << getpid() << "\tSignaling receive mutex" << endl;
 }
 
-vector<ClientMessage>* receivedData;
-pthread_cond_t received_data_cond = PTHREAD_COND_INITIALIZER;
-
-void sendDataToServer(int sender_server_port, int sender_thread_id, const short_time &time, const vector<ClientMessage>& msgs)
+vector<ClientPayload> prepareLocalResponses(const vector<ClientPayload> &data)
 {
-    static pthread_mutex_t send_data_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_mutex_lock(&send_data_mutex);
-    ServerMessage serv_msg;
-    serv_msg.sender_server_port = sender_server_port;
-    serv_msg.sender_thread_id = sender_thread_id;
-    serv_msg.time_of_req = time;
+    Database &database = Database::getInstance();
 
-    for (auto &cli_msg: msgs)
+    ClientPayload payload;
+    memset(&payload, 0, sizeof(payload));
+    payload.time = current_time();
+    payload.msgType = MessageType::SUCCESS;
+    strcpy(payload.topic, data[0].topic);
+
+    if (data[0].msgType == MessageType::CREATE_TOPIC)
     {
-        int sz = sizeof(ServerMessage) - sizeof(ClientMessage) + cli_msg.cur_size;
-        memcpy(&serv_msg.cli_msg, &cli_msg, sz);
-        cerr << currentDateTime() << " - " << sz << " bytes wriiten to another server with PORT " << info->server_send_port << ". Content - " << endl;
-        printServerMessage(&serv_msg);
+        cerr << "Request to add topic: " << data[0].topic << endl;
 
-        write(info->sendServerPORTInfo.connfd, (void*)&serv_msg, sz);
-    }
-
-    pthread_mutex_unlock(&send_data_mutex);
-}
-
-void sendDataToServer(int sender_server_port, int sender_thread_id, const short_time &time, const ClientMessageHeader& header, vector<string>& msgs)
-{
-    vector<ClientMessage> packedmsgs;
-
-    ClientMessage packedmsg;
-    memcpy(&packedmsg, &header, sizeof(header));
-    if (msgs.size() == 0)
-        msgs.push_back("");
-
-    for (int i = 0; i < msgs.size(); ++i)
-    {
-        auto &msg = msgs[i];
-        packedmsg.isLastData = (i == msgs.size() - 1);
-
-        int sz = msg.size() + sizeof(header);
-        strcpy(packedmsg.msg, msg.c_str());
-        packedmsg.cur_size = sz;
-
-        packedmsgs.push_back(packedmsg);
-    }
-
-    sendDataToServer(sender_server_port, sender_thread_id, time, packedmsgs);
-}
-
-void* serveReceiveRequest(void* data)
-{
-    static pthread_mutex_t received_data_mutex = PTHREAD_MUTEX_INITIALIZER;
-    pthread_detach(pthread_self());
-
-    void** arr = (void**)data;
-    assert(arr[2] != NULL);
-
-    int sender_server_port = *(int*)arr[0];
-    int sender_thread_id = *(int*)arr[1];
-    short_time time = *(short_time*)arr[2];
-    auto msgs = (vector<ClientMessage>*)arr[3];
-
-    delete (int*)arr[0];
-    delete (int*)arr[1];
-    delete (short_time*)arr[2];
-    delete[] arr;
-
-    // if self port, signal child
-    if (sender_server_port == info->PORT)
-    {
-        receivedData = msgs;
-        pthread_mutex_lock(&received_data_mutex);
-        pthread_cond_signal(&info->thread_pool.getCondFromThreadID(sender_thread_id));
-        pthread_cond_wait(&received_data_cond, &received_data_mutex);
-        pthread_mutex_unlock(&received_data_mutex);
-        return NULL;
-    }
-
-    // if get all topics
-    if (strcmp(msgs->at(0).req, "GAT") == 0)
-    {
-        set<string> topics;
-        for (auto &x: *msgs)
-            topics.insert(x.msg);
-        
-        for (auto &x: Database::getInstance().getAllTopics())
-            topics.insert(x);
-        
-        vector<string> topics_to_send;
-        for (auto &x: topics)
-            if (x.size() != 0)
-                topics_to_send.push_back(x);
-
-        sendDataToServer(sender_server_port, sender_thread_id, time, (ClientMessageHeader)msgs->at(0), topics_to_send);
-    }
-    else if (strcmp(msgs->at(0).req, "GNM") == 0)
-    {
-        // if topic doesn't exist, simply forward
-        if (!Database::getInstance().topicExists(msgs->at(0).topic))
-            sendDataToServer(sender_server_port, sender_thread_id, time, *msgs);
-
-        // get the msg w.r.t. time
-        auto temp_time = time;
-        string my_msg = Database::getInstance().getNextMessage(msgs->at(0).topic, temp_time);
-
-    }
-    else
-    {
-        sendDataToServer(sender_server_port, sender_thread_id, time, *msgs);
-    }
-    
-    delete msgs;
-    return NULL;
-}
-
-namespace RequestHandler
-{
-    vector<pair<string, short_time>> HandleSendingDataToNeighbour(int tid, vector<string> &in_msgs, const char* req, const char* topic, const short_time &clk = std::chrono::high_resolution_clock::now())
-    {
-        int sender_server_port = info->PORT;
-        int sender_thread_id = tid;
-
-        vector<ClientMessage> msgs_to_send;
-        ClientMessage msg;
-        strcpy(msg.req, req);
-        strcpy(msg.topic, topic);
-        
-        
-        for (int i = 0; i < in_msgs.size(); ++i)
+        if (data[0].topic[0] == '\0')
         {
-            msg.isLastData = i == (in_msgs.size() - 1);
-            msg.cur_size = sizeof(ClientMessageHeader) + in_msgs[i].size();
-            strcpy(msg.msg, in_msgs[i].c_str());
-            msgs_to_send.push_back(msg);
+            cerr << "Invalid Topic Name!" << endl;
+            payload.msgType = MessageType::INVALID_TOPIC_NAME;
+            return { payload };
         }
 
-        if (in_msgs.size() == 0)
+        if (database.addTopic(data[0].topic) == -1)
         {
-            msg.isLastData = true;
-            msg.cur_size = sizeof(ClientMessageHeader);
-            strcpy(msg.msg, "");
-            msgs_to_send.push_back(msg);
+            cerr << "Topic already exists!" << endl;
+            payload.msgType = MessageType::TOPIC_ALREADY_EXISTS;
         }
 
-        // Send the msgs
-        sendDataToServer(sender_server_port, sender_thread_id, clk, msgs_to_send);
+        cerr << "Topic added successfully!" << endl;
 
-        auto *mutex = &info->thread_pool.getMutexFromThreadID(tid);
-        auto *cond = &info->thread_pool.getCondFromThreadID(tid);
-
-        pthread_cond_wait(cond, mutex);
-
-        vector<pair<string, short_time>> ret;
-        for (auto &x: *receivedData)
-            ret.push_back({ x.msg, x.time });
-
-        pthread_cond_signal(&received_data_cond);
-        return ret;
+        strcpy(payload.topic, data[0].topic);
+        return { payload };
     }
-
-    void createTopic(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
+    else if (data[0].msgType == MessageType::PUSH_MESSAGE)
     {
-        assert(data.size() == 1);
-        int status = Database::getInstance().addTopic(data[0].topic);
-        string res = (status == -1) ? "TAL" : "OK";
-
-        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
+        cerr << "Request to push message '" << data[0].msg << "' related to topic: '" << data[0].topic << "'" << endl;
+        if (database.addMessage(data[0].topic, data[0].msg, payload.time) == -1)
+        {
+            cerr << "Topic doesn't exist" << endl;
+            payload.msgType = MessageType::TOPIC_NOT_FOUND;
+        }
+        
+        cerr << "Message added successfully!" << endl;
+        strcpy(payload.topic, data[0].topic);
+        return { payload };
     }
-
-    void pushMessage(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
+    else if (data[0].msgType == MessageType::PUSH_FILE_CONTENTS)
     {
-        assert(data.size() == 1);
-        int status = Database::getInstance().addMessage(data[0].topic, data[0].msg);
-        string res = (status == -1) ? "NTO" : "OK";
-        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
-    }
-
-    void pushFileContents(const vector<ClientMessage> &data, int connfd, string& errMsg, bool &isConnectionClosed)
-    {
+        cerr << "Request to push file contents related to topic: '" << data[0].topic << "'" << endl;
         vector<string> msgs;
-        for (auto &msg: data)
-            msgs.push_back(msg.msg);
+        for (auto &x: data)
+            msgs.push_back(x.msg);
 
-        int status = Database::getInstance().addMessages(data[0].topic, msgs);
-        string res = (status == -1) ? "NTO" : "OK";
-        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
+        if (database.addMessages(data[0].topic, msgs, payload.time) == -1)
+        {
+            cerr << "Topic doesn't exist" << endl;
+            payload.msgType = MessageType::TOPIC_NOT_FOUND;
+        }
+        
+        cerr << "Messages added successfully!" << endl;
+        strcpy(payload.topic, data[0].topic);
+
+        return { payload };
     }
-
-    void getAllTopics(int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
+    else if (data[0].msgType == MessageType::GET_ALL_TOPICS)
     {
-        vector<string> topics = Database::getInstance().getAllTopics();
-        auto ret  = HandleSendingDataToNeighbour(threadid, topics, "GAT", "");
+        cerr << "Request to get all topics" << endl;
+        auto topics = database.getAllTopics();
 
-        for (auto &[topic, time]: ret)
-            topics.push_back(topic);
+        if (topics.size() == 0)
+        {
+            cerr << "Topics don't exist" << endl;
+            payload.msgType = MessageType::TOPIC_NOT_FOUND;
+            return { payload };
+        }
 
-        string res = topics.size() == 0 ? "NTO" : "OK";
-        SocketIO::client_writeData(connfd, res.c_str(), "", topics, errMsg, isConnectionClosed);
-    }
+        cerr << "Sending " << topics.size() << " topics" << endl;
 
-    void getNextMessage(const vector<ClientMessage> &data, int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
-    {
-        // check for existence of topic        
-        vector<string> topics = Database::getInstance().getAllTopics();
-        auto ret  = HandleSendingDataToNeighbour(threadid, topics, "GAT", "");
-
-        for (auto &[topic, time]: ret)
-            topics.push_back(topic);
-
-        bool topicExists = false;        
+        vector<ClientPayload> send_data;
+        
         for (auto &topic: topics)
-            if (strcmp(topic.c_str(), data[0].topic) == 0)
-            {
-                topicExists = true;
-                break;
-            }
-
-        if (!topicExists)
         {
-            string res = "NTO";
-            SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
-            return;
+            strcpy(payload.topic, topic.c_str());
+            send_data.push_back(payload);
         }
 
-        // topic exists on atleast one server. Send the message back
-        auto time = data[0].time;
-        vector<string> msgs;
-        ret = HandleSendingDataToNeighbour(threadid, msgs, "GNM", data[0].topic, time);
-
-        assert(ret.size() < 2);
-        string my_msg = Database::getInstance().getNextMessage(data[0].topic, time);
-        
-        if (ret.size() == 0)
-            ret.push_back({ my_msg, time });
-        else if (my_msg != "")
-            if (ret[0].second > time)
-            {
-                ret[0].first = my_msg;
-                ret[0].second = time;
-            }
-
-        string res = ret[0].first == "" ? "NMG" : "OK";
-        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {ret[0].first}, errMsg, isConnectionClosed, ret[0].second);
+        return send_data;
     }
-
-    void getAllMessages(const vector<ClientMessage> &data, int connfd, int threadid, string& errMsg, bool &isConnectionClosed)
+    else if (data[0].msgType == MessageType::GET_NEXT_MESSAGE)
     {
-        if (!Database::getInstance().topicExists(data[0].topic))
+        cerr << "Request to get next message related to topic '" << data[0].topic << "' for time: " << DateTime(data[0].time) << endl;
+
+        payload.time = data[0].time;
+        string msg = database.getNextMessage(data[0].topic, payload.time);
+
+        if (msg == "")
         {
-            string res = "NTO";
-            SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, {}, errMsg, isConnectionClosed);
-            return;
+            cerr << "No message found" << endl;
+            payload.msgType = database.topicExists(data[0].topic) ? MessageType::MESSAGE_NOT_FOUND : MessageType::TOPIC_NOT_FOUND;
+            return { payload };
         }
 
-        auto time = data.back().time;
-        auto msgs = Database::getInstance().getBulkMessages(data[0].topic, time);
-        string res = msgs.size() == 0 ? "NMG" : "OK";
-        SocketIO::client_writeData(connfd, res.c_str(), data[0].topic, msgs, errMsg, isConnectionClosed, time);
+        cerr << "Sending message" << endl;
+        strcpy(payload.msg, msg.c_str());
+        return { payload };
     }
+    else if (data[0].msgType == MessageType::GET_BULK_MESSAGES)
+    {
+        cerr << "Request to get bulk messages related to topic '" << data[0].topic << "' for time: " << DateTime(data[0].time) << endl;
+
+        payload.time = data[0].time;
+        auto msgs = database.getBulkMessages(data[0].topic, payload.time);
+
+        if (msgs.size() == 0)
+        {
+            cerr << "No message found" << endl;
+            payload.msgType = database.topicExists(data[0].topic) ? MessageType::MESSAGE_NOT_FOUND : MessageType::TOPIC_NOT_FOUND;
+            return { payload };
+        }
+
+        vector<ClientPayload> send_data;
+
+        for (auto &[time, msg]: msgs)
+        {
+            strcpy(payload.msg, msg.c_str());
+            payload.time = time;
+            send_data.push_back(payload);
+        }
+
+        cerr << "Sending messages" << endl;
+        return send_data;
+    }
+
+    assert(false);
 }
 
 // On access validation from a client
-void serveClient(const SocketInfo& sockinfo, int threadid)
+void clientHandler(const SocketInfo& sockinfo, int threadid)
 {
+    string errMsg;
+    bool isConnectionClosed = false;
+
     while (true)
     {
-        // wait to get data
-        string errMsg;
-        bool isConnectionClosed;
-        auto data = SocketIO::client_readData(sockinfo.connfd, errMsg, isConnectionClosed);
-
-        if (isConnectionClosed)
-            break;
-
-        if (data.size() == 0)   // error
+        // instead of handling the send errors at end of loop, it is handled here because of continue statements in program
+        if (errMsg != "")
         {
-            cout << errMsg << endl;
-            continue;
+            std::cout << errMsg << endl;
+            break;
+        }
+        
+        auto data = PresentationLayer::getData(sockinfo.connfd, errMsg, isConnectionClosed);
+        if (errMsg != "")
+        {
+            std::cout << errMsg << endl;
+            break;
         }
 
-        if (strcmp(data[0].req, "CRE") == 0)
-            RequestHandler::createTopic(data, sockinfo.connfd, errMsg, isConnectionClosed);
-        else if (strcmp(data[0].req, "PUS") == 0)
-            RequestHandler::pushMessage(data, sockinfo.connfd, errMsg, isConnectionClosed);
-        else if (strcmp(data[0].req, "FPU") == 0)
-            RequestHandler::pushFileContents(data, sockinfo.connfd, errMsg, isConnectionClosed);
-        else if (strcmp(data[0].req, "GAT") == 0)
-            RequestHandler::getAllTopics(sockinfo.connfd, threadid, errMsg, isConnectionClosed);
-        else if (strcmp(data[0].req, "GNM") == 0)
-            RequestHandler::getNextMessage(data, sockinfo.connfd, threadid, errMsg, isConnectionClosed);
-        else if (strcmp(data[0].req, "GAM") == 0)
-            RequestHandler::getAllMessages(data, sockinfo.connfd, threadid, errMsg, isConnectionClosed);
-        else
-            SocketIO::client_writeData(sockinfo.connfd, "ERR", "", {}, errMsg, isConnectionClosed);
+        if (data[0].msgType == MessageType::CREATE_TOPIC || data[0].msgType == MessageType::PUSH_MESSAGE || data[0].msgType == MessageType::PUSH_FILE_CONTENTS)
+        {
+            PresentationLayer::sendData(sockinfo.connfd, prepareLocalResponses(data), errMsg, isConnectionClosed);
+        }
+        else if (data[0].msgType == MessageType::GET_ALL_TOPICS)
+        {
+            vector<ClientPayload> payload = prepareLocalResponses(data);
+            payload.push_back(data[0]);
 
-        if (errMsg == "")
-            continue;
+            // accummulate result from server
+            accumulateResponses(threadid, payload);
 
-        if (isConnectionClosed)
-            break;
+            // remove the last entry
+            serv_response[threadid].pop_back();
 
-        cout << errMsg << endl;
+            PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
+        }
+        else if (data[0].msgType == MessageType::GET_NEXT_MESSAGE || data[0].msgType == MessageType::GET_BULK_MESSAGES)
+        {
+            // Add topic from other ends to local database to sync
+            {
+                ClientPayload getAllTopics;
+                getAllTopics.msgType = MessageType::GET_ALL_TOPICS;
+                getAllTopics.time = current_time();
+                getAllTopics.topic[0] = '\0';
+                accumulateResponses(threadid, {getAllTopics});
+
+                for (auto &x: serv_response[threadid])
+                    Database::getInstance().addTopic(x.topic);
+            }
+
+            vector<ClientPayload> payload = prepareLocalResponses(data);
+            payload.push_back(data[0]);
+
+            // accummulate result from server
+            accumulateResponses(threadid, payload);
+
+            // remove the last entry
+            serv_response[threadid].pop_back();
+
+            PresentationLayer::sendData(sockinfo.connfd, serv_response[threadid], errMsg, isConnectionClosed);
+        }
     }
 }
 
 // Listening PORTS
-
 void recvHandler(int connfd, int threadId)
 {
-    // Since this port is serialised, no out of order or mixed packets will come
-    vector<ClientMessage> out;
-    ServerMessage msg;
-
-    while (1)
+    while (true)
     {
-        out.clear();
-        msg.cli_msg.isLastData = false;
+        auto data = PresentationLayer::getServerReq(connfd);
+        cerr << currentDateTime() << ": sizeof array read " << data.size() << endl;
 
-        while (!msg.cli_msg.isLastData)
+        if (data[0].sender_server_port == info->PORT)
         {
-            bzero((void*)&msg, sizeof(msg));
-            cerr << "Waiting to read from " << info->server_recv_port << endl;
-            int n = read(connfd, (void*)&msg, sizeof(msg) - sizeof(ClientMessage) + sizeof(ClientMessageHeader));
-            cerr << "\t(Received " << n << " bytes from " << info->server_recv_port << ")" << endl;
-            
+            int threadId = data[0].sender_thread_id;
 
-            if (msg.cli_msg.cur_size == sizeof(ClientMessageHeader))
-            {
-                cerr << currentDateTime() << " - " << n << " bytes read from another server with PORT " << info->server_recv_port << ". Content - " << endl;
-                printServerMessage(&msg);
+            // accumulate the results
 
-                out.push_back(msg.cli_msg);
-                continue;
-            }
+            serv_response[threadId].clear();
+            for (auto &x: data)
+                serv_response[threadId].push_back(x.client_payload);
 
-            int n2 = read(connfd, (void*)&(msg.cli_msg.msg), msg.cli_msg.cur_size - sizeof(ClientMessageHeader));
-            cerr << currentDateTime() << " - " << n + n2 << " bytes from another server with PORT " << info->server_send_port << ". Content - " << endl;
-            printServerMessage(&msg);
-            
-            msg.cli_msg.msg[n] = '\0';
-            out.push_back(msg.cli_msg);
+            cerr << "Signaling thread mutex" << endl;
+            pthread_cond_signal(&info->thread_pool.getCondFromThreadID(threadId));
+            continue;
         }
 
-        int sender_server_port = msg.sender_server_port;
-        int sender_thread_id = msg.sender_thread_id;
-        short_time time = msg.time_of_req;
+        // get local response
+        auto local = prepareLocalResponses({ data.back().client_payload });
 
-        // create a thread to start processing received data
-        pthread_t thread;
-        void** data = new void*[4];
-        data[0] = new int { sender_server_port };
-        data[1] = new int { sender_thread_id };
-        data[2] = new short_time { time };
-        data[3] = new vector<ClientMessage> { out };
+        // simply forward if no valid reply in current server
+        if (local[0].msgType != MessageType::SUCCESS)
+        {
+            // simply forward the data
+            cerr << "Locking info->send_mutex" << endl;
+            pthread_mutex_lock(&info->send_mutex);
+            PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, data);
+            cerr << "Unlocking info->send_mutex" << endl;
+            pthread_mutex_unlock(&info->send_mutex);
+            continue;
+        }
 
-        pthread_create(&thread, NULL, &serveReceiveRequest, (void*)data);
+        auto cli_req = data.back().client_payload;
+        data.pop_back();
+
+        vector<ServerPayload> serv_payload;
+        ServerPayload p;
+        p.sender_server_port = data[0].sender_server_port;
+        p.sender_thread_id = data[0].sender_thread_id;
+
+        // if received data is no success, return local data
+        if (data[0].client_payload.msgType != MessageType::SUCCESS)
+        {
+            for (auto &x: local)
+            {
+                memcpy(&p.client_payload, &x, sizeof(ClientPayload));
+                serv_payload.push_back(p);
+            }
+
+            memcpy(&p.client_payload, &cli_req, sizeof(ClientPayload));
+            serv_payload.push_back(p);
+
+            cerr << "Locking info->send_mutex" << endl;
+            pthread_mutex_lock(&info->send_mutex);
+            PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, serv_payload);
+            cerr << "Unlocking info->send_mutex" << endl;
+            pthread_mutex_unlock(&info->send_mutex);
+            continue;
+        }
+
+        memset(&p.client_payload, 0, sizeof(p.client_payload));
+        p.client_payload.time = current_time();
+        p.client_payload.msgType = MessageType::SUCCESS;
+        strcpy(p.client_payload.topic, data[0].client_payload.topic);  
+        
+        // Here means we need to merge the data
+        if (cli_req.msgType == MessageType::GET_ALL_TOPICS)
+        {
+            // Take union
+            set<string> topics;
+            for (auto &x: local)
+                topics.insert(x.topic);
+
+            for (auto &x: data)
+                topics.insert(x.client_payload.topic);
+
+            cerr << "on receive- Topic count to send: " << topics.size() << endl;
+            ServerPayload send_data;
+        
+            for (auto &topic: topics)
+            {
+                strcpy(p.client_payload.topic, topic.c_str());
+                serv_payload.push_back(p);
+            }
+        }
+        else if (cli_req.msgType == MessageType::GET_NEXT_MESSAGE)
+        {
+            // Take minnimum of two
+            auto _mintime = local[0].time < data[0].client_payload.time ? local[0].time : data[0].client_payload.time;
+
+            if (local[0].time == _mintime)
+                memcpy(&p.client_payload, &local[0], sizeof(ClientPayload));
+            else
+                memcpy(&p.client_payload, &data[0].client_payload, sizeof(ClientPayload));
+
+            serv_payload.push_back(p);
+        }
+        else if (cli_req.msgType == MessageType::GET_BULK_MESSAGES)
+        {
+            using pcs = pair<std::chrono::_V2::system_clock::time_point, string>;
+            priority_queue<pcs, vector<pcs>, greater<pcs>> pq;
+
+            for (auto &x: local)
+                pq.push({ x.time, x.msg });
+            
+            for (auto &x: data)
+                pq.push({ x.client_payload.time, x.client_payload.msg });
+
+            // get top BULK_MSG_SIZE msgs
+            for (int i = 0; !pq.empty() && i < BULK_LIMIT; ++i, pq.pop())
+            {
+                auto &time = pq.top().first;
+                auto &msg = pq.top().second;
+
+                strcpy(p.client_payload.msg, msg.c_str());
+                p.client_payload.time = time;
+                serv_payload.push_back(p);
+            }
+        }
+        else
+            assert(0);
+
+        memcpy(&p.client_payload, &cli_req, sizeof(ClientPayload));
+        serv_payload.push_back(p);
+        cerr << "Locking info->send_mutex" << endl;
+        pthread_mutex_lock(&info->send_mutex);
+        PresentationLayer::sendServerData(info->sendServerPORTInfo.connfd, serv_payload);
+        cerr << "Unlocking info->send_mutex" << endl;
+        pthread_mutex_unlock(&info->send_mutex);
     }
 }
 
-void clientConnectionHandler(int connfd, int threadId)
+SocketInfo activeConnect(const char* ip, int PORT)
 {
-    int n = 1;
-    SocketInfo sockinfo;
-    sockinfo.connfd = connfd;
-    socklen_t size = sizeof(sockinfo.dest_addr);
+    SocketInfo info;
+    info.sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
-    if (getpeername(connfd, (struct sockaddr*)&sockinfo.dest_addr, &size) < 0)
+    if (info.sockfd < 0)
     {
-        perror("getpeername error");
-        return;
+        perror("socket error");
+        exit(1);
     }
 
-    if (getsockname(connfd, (struct sockaddr*)&sockinfo.my_addr, &size) < 0)
+    memset(&info.dest_addr, 0, sizeof(info.dest_addr));
+    info.dest_addr.sin_family = AF_INET;
+    info.dest_addr.sin_port = htons(PORT);
+    info.dest_addr.sin_addr.s_addr = inet_addr(ip);
+
+    if (connect(info.sockfd, (struct sockaddr*)&info.dest_addr, sizeof(info.dest_addr)) < 0)
     {
-        perror("getsockname error");
-        return;
+        perror("connect error");
+        exit(1);
     }
 
-    cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connected to client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+    info.connfd = info.sockfd;
+    return info;
+}
 
-    char BUFF[4];
-    n = read(connfd, (void*)BUFF, sizeof(BUFF));
-    if (n < 0)
+SocketInfo makePassiveSocket(int PORT)
+{
+    SocketInfo info;
+
+    // make socket
+    if ((info.sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
     {
-        perror("read error");
-        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
-        return;
-    }
-    
-    if (n == 0)
-    {
-        cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
-        return;
-    }
-    
-    if (strcmp(BUFF, "PUB") == 0 || strcmp(BUFF, "SUB") == 0)
-    {
-        strcpy(BUFF, "OK");
-        write(connfd, BUFF, sizeof(BUFF));
-        serveClient(sockinfo, threadId);
-    }
-    else
-    {
-        strcpy(BUFF, "ERR");
-        write(connfd, BUFF, sizeof(BUFF));
-        cout << "Unknown client!!" << endl;
+        perror("socker error");
+        exit(1);
     }
 
-    close(connfd);
-    cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+    // fill own port details
+    memset(&info.my_addr, 0, sizeof(info.my_addr));
+    info.my_addr.sin_family = AF_INET;
+    info.my_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    info.my_addr.sin_port = htons(PORT);
+
+    // attach PORT to socket
+    if (bind(info.sockfd, (struct sockaddr*)&info.my_addr, sizeof(info.my_addr)) < 0)
+    {
+        perror("bind error");
+        exit(1);
+    }
+
+    cout << "Listening to PORT " << ntohs(info.my_addr.sin_port) << "..." << endl;
+
+    //  move from CLOSED to LISTEN state, create passive socket
+    if (listen(info.sockfd, MAX_CONNECTION_COUNT) < 0)
+    {
+        perror("listen error");
+        exit(1);
+    }
+
+    return info;
 }
 
 void serverOnLoad()
@@ -478,7 +493,7 @@ void serverOnLoad()
 	act.sa_flags = 0;
 
     // Create a socket to receive the client connections
-    info->listenSockInfo = SocketIO::makePassiveSocket(info->PORT);
+    info->listenSockInfo = makePassiveSocket(info->PORT);
 
     // synchronize with creator
     info->q->send_data(getppid(), getpid(), "msgsnd error");
@@ -504,7 +519,7 @@ void serverOnLoad()
         }, (void*)&info->listenSockInfo);
 
     // make a new connection request
-    info->sendServerPORTInfo = SocketIO::activeConnect("127.0.0.1", info->server_send_port);
+    info->sendServerPORTInfo = activeConnect("127.0.0.1", info->server_send_port);
     pthread_join(thread1, nullptr);
 
     cout << ntohs(info->listenSockInfo.my_addr.sin_port) << " : Connected to port " << ntohs(info->listenSockInfo.dest_addr.sin_port) << endl;
@@ -516,7 +531,9 @@ void serverOnLoad()
     // synchronize with creator
     info->q->send_data(getppid(), getpid(), "msgsnd error");
     info->q->receive_data(getpid(), "msgrcv error");
-
+    
+    freopen(("logs/" + to_string(info->PORT) + ".log").c_str(), "w", stderr);
+    
     // Now, we listen for connection from clients
     while (true)
     {
@@ -531,13 +548,63 @@ void serverOnLoad()
                 perror("accept error");
         }
 
-        info->thread_pool.startOperation(info->listenSockInfo.connfd, clientConnectionHandler);
+        info->thread_pool.startOperation(info->listenSockInfo.connfd, [](int connfd, int threadId) -> void
+        {
+            int n = 1;
+            SocketInfo sockinfo;
+            sockinfo.connfd = connfd;
+            socklen_t size = sizeof(sockinfo.dest_addr);
+
+            if (getpeername(connfd, (struct sockaddr*)&sockinfo.dest_addr, &size) < 0)
+            {
+                perror("getpeername error");
+                return;
+            }
+
+            if (getsockname(connfd, (struct sockaddr*)&sockinfo.my_addr, &size) < 0)
+            {
+                perror("getsockname error");
+                return;
+            }
+
+            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connected to client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+
+            char BUFF[4];
+            n = read(connfd, (void*)BUFF, sizeof(BUFF));
+            if (n < 0)
+            {
+                perror("read error");
+                cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+                return;
+            }
+            
+            if (n == 0)
+            {
+                cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+                return;
+            }
+            
+            if (strcmp(BUFF, "PUB") == 0 || strcmp(BUFF, "SUB") == 0)
+            {
+                strcpy(BUFF, "OK");
+                write(connfd, BUFF, sizeof(BUFF));
+                clientHandler(sockinfo, threadId);
+            }
+            else
+            {
+                strcpy(BUFF, "ERR");
+                write(connfd, BUFF, sizeof(BUFF));
+                cout << "Unknown client!!" << endl;
+            }
+
+            close(connfd);
+            cout << ntohs(sockinfo.my_addr.sin_port)  << ": Connection closed from client " << inet_ntoa(sockinfo.dest_addr.sin_addr) << ":" << ntohs(sockinfo.dest_addr.sin_port) << endl;
+        });
     }
 }
 
 int main(int argc, char** argv)
 {
-    printSizeInfo();
     const Queue<int> queue { ftok(".", 'b') };
     int start_port;
     int count;
@@ -561,7 +628,6 @@ int main(int argc, char** argv)
         if ((pid = fork()) == 0)
         {
             info = new ServerInfo { &queue, start_port + i, start_port + (i + 1) % count, start_port + (i - 1 + count) % count };
-            freopen(("logs/" + to_string(info->PORT) + ".log").c_str(), "w", stderr);
             serverOnLoad();
             exit(0);
         }

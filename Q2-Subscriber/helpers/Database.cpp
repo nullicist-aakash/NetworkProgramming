@@ -1,5 +1,5 @@
 #include "Database.h"
-#include "SocketIO.h"
+#include "Time.h"
 #include <iostream>
 #include <functional>
 #include <unordered_map>
@@ -28,9 +28,6 @@ void Database::removeOldMessages(const string &topic)
     
     auto time = std::chrono::high_resolution_clock::now();
 
-    if (!mp[topic].empty())
-        cerr << "Top message has time difference: " << std::chrono::duration<double, std::milli>(time - mp[topic].top().first).count() << endl;
-
     while (!mp[topic].empty() &&
         std::chrono::duration<double, std::milli>(time - mp[topic].top().first).count() > MESSAGE_TIME_LIMIT * 1000)
         mp[topic].pop();
@@ -46,27 +43,26 @@ Database& Database::getInstance()
 }
 
 int Database::addTopic(const char* in_topic)
-    {
-        if (topicExists(in_topic))
-        {
-            cerr << "Topic already exists!" << endl;
-            return -1;
-        }
-        string topic(in_topic);
-
-        lock();
-        mp[topic] = {};
-        unlock();
-        return 0;
-    }
-
-inline bool Database::topicExists(const char* in_topic) const
 {
+    if (topicExists(in_topic))
+    {
+        cerr << "Topic already exists!" << endl;
+        return -1;
+    }
     string topic(in_topic);
-    return mp.find(topic) != mp.end();
+
+    lock();
+    mp[topic] = {};
+    unlock();
+    return 0;
 }
 
-int Database::addMessage(const char* in_topic, const char* in_message)
+bool Database::topicExists(const char* in_topic) const
+{
+    return mp.find(string(in_topic)) != mp.end();
+}
+
+int Database::addMessage(const char* in_topic, const char* in_message, short_time& time)
 {
     string topic(in_topic);
     string message(in_message);
@@ -78,13 +74,13 @@ int Database::addMessage(const char* in_topic, const char* in_message)
 
     lock();
 
-    mp[topic].push({std::chrono::high_resolution_clock::now(), message});
+    mp[topic].push({ time = current_time(), message});
 
     unlock();
     return 0;
 }
 
-int Database::addMessages(const char* in_topic, const vector<string> &msgs)
+int Database::addMessages(const char* in_topic, const vector<string> &msgs, short_time& time)
 {
     string topic(in_topic);
     if (!topicExists(in_topic))
@@ -94,7 +90,7 @@ int Database::addMessages(const char* in_topic, const vector<string> &msgs)
     lock();
 
     for (auto &msg: msgs)
-        mp[topic].push({std::chrono::high_resolution_clock::now(), msg});
+        mp[topic].push({ time = current_time(), msg});
 
     unlock();
     return 0;
@@ -113,7 +109,6 @@ string Database::getNextMessage(const char* in_topic, short_time &clk)
     lock();
 
     priority_queue<pcs> pq;
-    cerr << "Searching for time > " << DateTime(clk) << endl;
 
     while (!mp[topic].empty() && mp[topic].top().first <= clk)
     {
@@ -138,9 +133,9 @@ string Database::getNextMessage(const char* in_topic, short_time &clk)
     return output;
 }
 
-const vector<string> Database::getBulkMessages(const char* in_topic, short_time &clk)
+const vector<pair<short_time, string>> Database::getBulkMessages(const char* in_topic, short_time &clk)
 {
-    vector<string> msgs;
+    vector<pair<short_time, string>> msgs;
     auto old = clk;
 
     for (int i = 0; i < BULK_LIMIT; ++i)
@@ -150,7 +145,7 @@ const vector<string> Database::getBulkMessages(const char* in_topic, short_time 
         if (s == "")
             break;
         
-        msgs.push_back(s);
+        msgs.push_back({ clk, s });
     }
 
     return msgs;

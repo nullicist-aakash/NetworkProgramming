@@ -5,8 +5,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <chrono>
-#include <cstring>
+#include <string>
 #include <unordered_map>
+#include <queue>
 
 using namespace std;
 
@@ -18,8 +19,7 @@ using short_time = std::chrono::_V2::system_clock::time_point;
 class Database
 {
 private:
-    using short_time = std::chrono::_V2::system_clock::time_point;
-    using pcs = pair<std::chrono::_V2::system_clock::time_point, string>;
+    using pcs = pair<short_time, string>;
 
     pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
     unordered_map<string, priority_queue<pcs, vector<pcs>, greater<pcs>>> mp;
@@ -46,15 +46,15 @@ public:
 
     int addTopic(const char* in_topic);
 
-    inline bool topicExists(const char* in_topic) const;
+    bool topicExists(const char* in_topic) const;
 
-    int addMessage(const char* in_topic, const char* in_message);
+    int addMessage(const char* in_topic, const char* in_message, short_time&);
 
-    int addMessages(const char* in_topic, const vector<string> &msgs);
+    int addMessages(const char* in_topic, const vector<string> &msgs, short_time&);
 
     string getNextMessage(const char* in_topic, short_time &clk);
 
-    const vector<string> getBulkMessages(const char* in_topic, short_time &clk);
+    const vector<pair<short_time, string>> getBulkMessages(const char* in_topic, short_time &clk);
 
     const vector<string> getAllTopics() const;
 };
