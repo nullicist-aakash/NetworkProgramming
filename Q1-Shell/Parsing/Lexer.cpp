@@ -1,6 +1,12 @@
 #include "Lexer.h"
 #include <cassert>
 #include <iomanip>
+#include <unistd.h>
+#include <sys/types.h>
+#include <pwd.h>
+
+#include <iostream>
+
 using namespace std;
 
 const char* LexerLoc = "Parsing/DFA.txt";
@@ -169,6 +175,17 @@ Token* getNextToken(Buffer& buffer)
 			auto res = dfa.lookupTable.find(token->lexeme);
 			if (res != dfa.lookupTable.end())
 				token->type = dfa.lookupTable.at(token->lexeme);
+
+			if (token->lexeme[0] == '~')
+			{
+				if ((token->length > 1 && token->lexeme[1] == '/') || token->length == 1)
+				{
+					struct passwd *pw = getpwuid(getuid());
+					const char *homePath = pw->pw_dir;
+					string remain = token->lexeme.substr(1);
+					token->lexeme = string(homePath) + remain;
+				}
+			}
 		}
 
 		return token;

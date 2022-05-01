@@ -17,8 +17,8 @@ TK_ERROR_PATTERN
 TK_ERROR_LENGTH
 TK_EXIT
 TK_END
-0 1 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123457890[]\{}!@$%^*():-=_+";'./?
-1 1 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123457890[]\{}!@$%^*():-=_+";'./?
+0 1 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890[]\{}!@$%^*():-=_+";'./?~
+1 1 abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890[]\{}!@$%^*():-=_+";'./?~
 0 2 |
 0 3 #
 0 5 <

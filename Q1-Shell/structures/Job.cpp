@@ -103,12 +103,14 @@ Job::Job(ASTNode* input)
     if (input->children[1])
     {
         auto redirect = input->children[1];
+        char *completePath = new char[256];
 
         // redirect stdio
         if (redirect->children[0])
         {
             string fileLoc = redirect->children[0]->children[0]->token->lexeme;
-            FILE* fp = fopen(fileLoc.c_str(), "r");
+            realpath(fileLoc.c_str(), completePath);
+            FILE* fp = fopen(completePath, "r");
             if (fp == NULL)
             {
                 cout << fileLoc << ": " << strerror(errno) << ". Shell will now exit" << endl;
@@ -126,12 +128,13 @@ Job::Job(ASTNode* input)
         if (redirect->children[1])
         {
             string fileLoc = redirect->children[1]->children[0]->token->lexeme;
+            realpath(fileLoc.c_str(), completePath);
             FILE* fp;
 
             if (redirect->children[1]->token->type == TokenType::TK_OUT_NEW_REDIRECT)
-                fp = fopen(fileLoc.c_str(), "w");
+                fp = fopen(completePath, "w");
             else
-                fp = fopen(fileLoc.c_str(), "a");
+                fp = fopen(completePath, "a");
             
             if (fp == NULL)
             {
@@ -139,10 +142,12 @@ Job::Job(ASTNode* input)
                 exit(-1);
             }
 
-            stdout = fileno(fp);            
+            stdout = fileno(fp);          
         }
         else
             stdout = dup(1);
+
+        delete[] completePath;
     }
 }
 

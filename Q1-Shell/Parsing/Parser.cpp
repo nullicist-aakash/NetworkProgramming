@@ -403,7 +403,7 @@ ParseTreeNode* parseInputSourceCode(Buffer& buffer, bool &isError)
 
 		cerr << endl << "Stack config: ";
 		printStack(st);
-		cerr << "Input symbol: " << parser.symbolType2symbolStr[input_terminal] << endl;
+		cerr << "Input symbol: " << parser.symbolType2symbolStr[input_terminal] << "(" << lookahead->lexeme << ")" << endl;
 
 		// if top of stack matches with input terminal (terminal at top of stack)
 		if (stack_top == input_terminal)
