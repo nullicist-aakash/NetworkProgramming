@@ -2,7 +2,9 @@
 
 ## About the projects
 This repo contains my labs and assignment submissions for the network programming course, BITS Pilani, second semester, 2021-22.
+
 We were given two assignments, containing two questions each. We were required to do any three questions out of 4 questions. I did both of assignment 1 and first of assignment 2.
+
 After taking permission from instructor, I was allowed to use C++ as long as I don't use any system call wrappers.
 
 ## Labs
